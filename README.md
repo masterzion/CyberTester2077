@@ -23,7 +23,7 @@ Use `-SkipBrowser` (PowerShell) or `--skip-browser` (Bash) for documentation-onl
 
 ## Configuration
 
-Edit the prompts directly in `automation_tests/automation-settings.yml`:
+Edit the stage prompts directly in `automation_tests/automation-settings.yml`:
 
 ```yaml
 prompts:
@@ -38,9 +38,10 @@ prompts:
 The actual configuration contains the complete prompts, including response schemas.
 Preserve those schemas when editing because the scripts validate the responses.
 Destination descriptions, current documents, source content, code roots, and tool
-results are attached automatically; no placeholders are needed. If a stage key is
-omitted, the script uses its versioned default in `stage-prompts.yml`. Blank prompts
-are rejected. Restart a running script to load edits.
+results are attached automatically by the host script; the YAML prompt should not
+contain placeholders for them. If a stage key is omitted, the script uses its
+versioned default in `stage-prompts.yml`. Blank prompts are rejected. Restart a
+running script to load edits.
 
 The categorizer supports separate models for each stage under `llm`:
 
@@ -52,17 +53,19 @@ request; the script reports the error rather than silently enabling thinking.
 llm:
   endpoint: "http://192.168.2.110:1234/api/v1/chat"
   api_key_env: "LLM_API_KEY"
-  model: "google/gemma-3-4b"
   model_stage1: "google/gemma-3-4b" # Classification
   model_stage2: "google/gemma-3-4b" # Deduplication
   model_stage3: "google/gemma-3-4b" # Code review
+  model: "google/gemma-3-4b" # Optional fallback and browser-audit model
 ```
 
 Set each stage field to the model identifier served by your endpoint. Resolution is
 `MODEL_STAGE1/2/3` environment override, then the corresponding YAML stage field,
 then `MODEL_NAME`, then `llm.model`. The shared endpoint and API key apply to all
-stages. Request logs and the report show the effective stage models. Browser audits
-and their HTML reporter continue to use `llm.model`.
+stages. Request logs and the report show the effective stage models. The fallback
+`llm.model` is optional for categorization when every `model_stage*` value is set,
+but the Playwright audit scripts and HTML reporter still use `MODEL_NAME` or
+`llm.model`; keep it configured when running browser audits.
 
 Edit `automation_tests/automation-settings.yml`. It contains:
 
@@ -71,9 +74,10 @@ Edit `automation_tests/automation-settings.yml`. It contains:
 - `documentation`: source folder, destination folder, and destination file definitions.
 - `mobile`: responsive screen profiles and an enabled flag.
 
-`AUTOMATION_SETTINGS` can select another settings file. `MODEL_NAME` and
-`MODEL_URL` override YAML for a process. The root PowerShell categorization command
-also accepts `-Settings "path/to/settings.yml"`.
+`AUTOMATION_SETTINGS` can select another settings file. `MODEL_STAGE1`,
+`MODEL_STAGE2`, `MODEL_STAGE3`, `MODEL_NAME`, and `MODEL_URL` override YAML for a
+process. The root PowerShell categorization command also accepts
+`-Settings "path/to/settings.yml"`.
 Paths in documentation settings resolve relative to the repository root.
 
 Keep documentation settings in the settings file. For compatibility, the categorizer
@@ -166,10 +170,16 @@ node temporary-categorize-main-docs.cjs --source-file role-branding.md --apply
 Stage 1 reads selected source Markdown files one at a time. After each source is
 classified, its accepted appendices are written immediately to the configured
 destination files, so completed source work remains available if a later request
-fails or the process is interrupted. Each request includes the allowed filenames,
-their full content descriptions, existence status, and current destination content.
-Stage 2 reads every configured destination in sequence and removes exact duplicate
-paragraphs while preserving unique content. Terminal progress output shows both stages.
+fails or the process is interrupted. Each request includes the configured Stage 1
+prompt, allowed filenames, their full content descriptions, existence status, and
+current destination content.
+
+Stage 2 reads every configured destination in sequence and sends the configured
+Stage 2 prompt plus numbered content blocks to the model. The host removes only
+verified exact duplicate blocks and preserves unique content. Stage 3 sends the
+configured Stage 3 prompt plus a read-only code-tool protocol; the model can ask
+for host-controlled `find`, `grep`, and `read` operations before returning
+evidence-cited findings. Terminal progress output shows all enabled stages.
 
 The current ten destinations are:
 
