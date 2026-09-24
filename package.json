@@ -1,0 +1,15 @@
+{
+  "name": "cybertester2077",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "audit:ui": "node automation_tests/child-interface-audit.cjs",
+    "audit:report": "node automation_tests/generate-html-report.cjs",
+    "audit:ui:report": "node automation_tests/child-interface-audit.cjs && node automation_tests/generate-html-report.cjs",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1",
+    "yaml": "2.9.0"
+  }
+}

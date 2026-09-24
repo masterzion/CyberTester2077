@@ -1,0 +1,37 @@
+# Copy to automation-settings.yml (ignored by Git) and adjust for this machine.
+web:
+  app_url: "http://127.0.0.1:3000"
+  headless: true
+  max_pages: 30
+  max_actions_per_page: 50
+  action_timeout_ms: 5000
+
+llm:
+  endpoint: "http://192.168.2.110:1234/api/v1/chat"
+  api_key_env: "LLM_API_KEY" # Read from .env or the process environment; never put the secret here.
+  model: "ornith-1.5-9b"
+
+documentation:
+  source_folder: "./source-docs" # Read-only Markdown source; this script never writes here.
+  destination_folder: "./docs" # Existing Markdown files the categorizer may read and append to.
+  source_read_only: true
+  destination_read_write: true
+  max_documents_per_page: 8
+
+mobile:
+  enabled: true
+  adb_serial: "emulator-5554" # Leave blank to auto-detect one connected emulator.
+  application_id: "com.learnvia.demo"
+  screen_profiles:
+    - name: "compact-android"
+      width: 360
+      height: 800
+      density: 440
+    - name: "common-android"
+      width: 384
+      height: 832
+      density: 420
+    - name: "large-android"
+      width: 412
+      height: 915
+      density: 440
