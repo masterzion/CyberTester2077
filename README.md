@@ -102,16 +102,35 @@ Stages use separate responsibilities and instructions:
   qualifications must be preserved. A broad existing summary is not sufficient
   reason to skip more detailed source content. This is a model instruction, not
   an automatic proof of completeness; generated output still requires review.
-- Stage 2 uses `prompts.stage2` from the settings file to identify duplicate
-  blocks. The host removes only proposed blocks equal after whitespace normalization,
-  preserving case, numbers, commands, headings and provenance. Similar passages
-  with differing details remain and are reported as recommendations. Documents
-  containing fenced code are conservatively retained. Invalid responses preserve
-  the document and are recorded as errors.
+- Stage 2 uses `prompts.stage2` to return the complete deduplicated Markdown
+  for each file. It can consolidate differently worded repetitions while preserving
+  unique details, examples, code and source attribution. The returned content
+  replaces the same file in apply mode; it is not an executive summary.
+  Empty, JSON-plan, or explicitly truncated responses preserve the original file
+  and are recorded as errors.
 - Stage 3 uses `prompts.stage3` from the settings file: discover file IDs,
   read code, compare documentation claims, and return findings with line citations.
   Its examples distinguish literal searches from regular expressions and require
   discovered file IDs rather than numeric root IDs.
+
+Run only deduplication against existing configured destination documents:
+`./run-categorize-docs.ps1 -Stage2Only`. Add `-Preview` for no writes.
+Node and Bash accept `--stage2-only` (plus `--apply` to save).
+This skips stages 1 and 3 and cannot be combined with `-SourceFile` or `-Stage3Only`.
+Configure the per-request timeout under `llm` in `automation-settings.yml`:
+`timeout_seconds: 3600` allows one hour for each model request.
+Optional `timeout_stage2_seconds` overrides that value for stage 2.
+Without configuration, stage 2 defaults to 1800 seconds and other stages to 300.
+Each file is read, deduplicated independently, and saved back to the same path
+before the next file is processed. Missing destination files are skipped.
+
+After each completed stage in apply mode, the entire destination folder is
+compressed into `docs-stage1.tgz`, `docs-stage2.tgz`, or `docs-stage3.tgz`
+beside that folder. Each archive replaces the previous snapshot for that stage
+only after compression succeeds. `tar` must be available on PATH.
+Snapshots include partial results when individual document errors occur;
+archive failures stop the run. Preview creates no archives.
+Stage 2 errors include the raw model text in the final report for diagnosis.
 
 Run only the code-review stage against existing configured destination documents:
 `./run-categorize-docs.ps1 -Stage3Only`. Add `-Preview` for no writes.
@@ -175,8 +194,8 @@ prompt, allowed filenames, their full content descriptions, existence status, an
 current destination content.
 
 Stage 2 reads every configured destination in sequence and sends the configured
-Stage 2 prompt plus numbered content blocks to the model. The host removes only
-verified exact duplicate blocks and preserves unique content. Stage 3 sends the
+Stage 2 prompt plus the full file content to the model. The returned deduplicated
+Markdown is saved before processing the next file. Stage 3 sends the
 configured Stage 3 prompt plus a read-only code-tool protocol; the model can ask
 for host-controlled `find`, `grep`, and `read` operations before returning
 evidence-cited findings. Terminal progress output shows all enabled stages.
@@ -201,11 +220,10 @@ Change `documentation.destination_files` to change this list. Each item uses
 when source-backed additions are returned. It does not require pre-created files.
 Preview never creates destination files.
 
-Deduplication asks the model to identify repetitions and verifies equality after
-whitespace normalization before removal. Case and numbers remain significant.
-Similar passages and conflicts may remain and require review. The model is
-instructed to preserve detail, distinguish implemented work from proposals, and
-report uncertainty. Review generated text against its sources before relying on it.
+Deduplication now relies on the model to preserve unique information rather than
+verifying exact block equality. Review the resulting Markdown against the original;
+the host cannot prove that a complete-looking response preserves every detail.
+The prompt requires preserving conflicting claims, numbers, commands and caveats.
 
 ## Credentials and account testing
 

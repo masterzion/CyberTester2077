@@ -7,3 +7,6 @@ automation_tests/automation-settings.yml
 automation_tests/[0-9]*-*/
 automation_tests/[0-9]*-account-matrix.json
 docs/*
+docs-stage[123].tgz
+docs-stage[123].tgz.*.tmp
+docs-stage[123].zip

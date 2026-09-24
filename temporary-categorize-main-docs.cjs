@@ -6,6 +6,7 @@
  */
 const fs = require('node:fs');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 const YAML = require('yaml');
 const { createReader, reviewDocument, renderReview, inside } = require('./code-review-docs.cjs');
 const { duplicatePrompt, applyDuplicates } = require('./deduplicate-docs.cjs');
@@ -21,6 +22,7 @@ const DOCS = path.resolve(ROOT, documentation.destination_folder || './docs');
 const SOURCE_FOLDER = path.resolve(ROOT, documentation.source_folder || './source-docs');
 const APPLY = process.argv.includes('--apply');
 const STAGE3_ONLY = process.argv.includes('--stage3-only');
+const STAGE2_ONLY = process.argv.includes('--stage2-only');
 const MODEL_URL = process.env.MODEL_URL || settings.llm?.endpoint || 'http://192.168.2.110:1234/api/v1/chat';
 const MODEL = process.env.MODEL_NAME || settings.llm?.model || 'ornith-1.5-35b-a3b';
 const STAGE_MODELS = Object.fromEntries([1,2,3].map(stage => [stage, process.env['MODEL_STAGE'+stage] || settings.llm?.['model_stage'+stage] || MODEL]));
@@ -88,13 +90,30 @@ async function classify(sourcePath, mainText, targets) {
 async function askModel(prompt, stage) {
   const model = STAGE_MODELS[stage];
   if (!model) throw new Error('Unknown model stage: '+stage);
-  console.log('\n[MODEL] stage='+stage+' model='+model+' endpoint='+MODEL_URL);
-  const response = await fetch(MODEL_URL, { method: 'POST', signal: AbortSignal.timeout(300000), headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model, input: prompt, reasoning: 'off', stream: false, temperature: 0, max_output_tokens: 8000 }) });
+  const timeoutSeconds = modelTimeoutSeconds(stage);
+  console.log('\n[MODEL] stage='+stage+' model='+model+' endpoint='+MODEL_URL+' timeout='+timeoutSeconds+'s');
+  const signal = AbortSignal.timeout(timeoutSeconds * 1000);
+  let body;
+  try {
+  const response = await fetch(MODEL_URL, { method: 'POST', signal, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model, input: prompt, reasoning: 'off', stream: false, temperature: 0, max_output_tokens: 8000 }) });
   if (!response.ok) throw new Error('model HTTP ' + response.status);
-  const body = await response.json();
-  return { plan: parseJson(extractText(body.choices?.[0]?.message?.content || body.output || body.response || body)), raw: extractText(body.choices?.[0]?.message?.content || body.output || body.response || body) };
+  body = await response.json();
+  } catch (error) {
+    if (signal.aborted) throw new Error('Stage '+stage+' model request timed out after '+timeoutSeconds+' seconds. Increase llm.timeout_seconds or llm.timeout_stage'+stage+'_seconds in automation-settings.yml.');
+    throw error;
+  }
+  return { plan: parseJson(extractText(body.choices?.[0]?.message?.content || body.output || body.response || body)), raw: extractText(body.choices?.[0]?.message?.content || body.output || body.response || body), finishReason: body.choices?.[0]?.finish_reason || body.incomplete_details?.reason || body.stats?.stop_reason || body.stop_reason };
+}
+function modelTimeoutSeconds(stage) {
+  const value = settings.llm?.['timeout_stage'+stage+'_seconds'] ?? settings.llm?.timeout_seconds ?? (stage === 2 ? 1800 : 300);
+  const seconds = Number(value);
+  if (!Number.isInteger(seconds) || seconds < 1 || seconds > 2147483) throw new Error('Model timeout must be an integer between 1 and 2147483 seconds');
+  return seconds;
 }
 async function main() {
+  for (const stage of [1,2,3]) modelTimeoutSeconds(stage);
+  if (STAGE2_ONLY && STAGE3_ONLY) throw new Error('--stage2-only cannot be combined with --stage3-only');
+  if (STAGE2_ONLY && process.argv.includes('--source-file')) throw new Error('--stage2-only cannot be combined with --source-file');
   if (STAGE3_ONLY && process.argv.includes('--source-file')) throw new Error('--stage3-only cannot be combined with --source-file');
   const sourceReal = fs.existsSync(SOURCE_FOLDER) ? fs.realpathSync(SOURCE_FOLDER) : SOURCE_FOLDER;
   const destinationResolved = fs.existsSync(DOCS) ? fs.realpathSync(DOCS) : DOCS;
@@ -105,7 +124,7 @@ async function main() {
   if (APPLY && documentation.destination_read_write === false) throw new Error('Destination writes are disabled in configuration.');
   const code = settings.code || {};
   let reader = null;
-  if (code.code_review === true) {
+  if (code.code_review === true && !STAGE2_ONLY) {
     if (code.source_read_only === false) throw new Error('Code review supports read-only source access only');
     if (!Array.isArray(code.source_folder) || !code.source_folder.length) throw new Error('code.source_folder must be a nonempty list of folders');
     reader = createReader(code.source_folder.map(folder=>path.resolve(ROOT,folder)));
@@ -115,9 +134,22 @@ async function main() {
   if (STAGE3_ONLY && !reader) throw new Error('--stage3-only requires code.code_review: true');
   const missing = findTargets().filter(target => !target.exists).map(target => target.name);
   const state = new Map(findTargets().filter(target => target.file).map(target => [target.name, { ...target, pending: [] }]));
-  const sourceDocuments = STAGE3_ONLY ? [] : sourceFiles();
+  const sourceDocuments = STAGE3_ONLY || STAGE2_ONLY ? [] : sourceFiles();
   const report = { mode: APPLY ? 'apply' : 'preview', model: MODEL, stageModels: STAGE_MODELS, settingsFile: SETTINGS_FILE, sourceFolder: SOURCE_FOLDER, destinationFolder: DOCS, sources: sourceDocuments.length, missingTargets: missing, updates: [], skipped: [], errors: [] };
-  if (!STAGE3_ONLY) console.log('[STAGE 1/'+stages+'] Reading and classifying source documentation');
+  function backup(stage) {
+    if (!APPLY || !fs.existsSync(DOCS)) return;
+    const archive = path.join(path.dirname(DOCS), 'docs-stage'+stage+'.tgz');
+    const temporary = archive + '.' + process.pid + '.tmp';
+    try {
+      execFileSync('tar', ['-czf', temporary, '-C', path.dirname(DOCS), path.basename(DOCS)], {stdio:'pipe'});
+      fs.renameSync(temporary, archive);
+      (report.backups ||= []).push({stage, archive});
+      console.log('\n[BACKUP] '+archive);
+    } finally {
+      if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
+    }
+  }
+  if (!STAGE3_ONLY && !STAGE2_ONLY) console.log('[STAGE 1/'+stages+'] Reading and classifying source documentation');
   for (const [sourceIndex, sourcePath] of sourceDocuments.entries()) {
     progress('sources', sourceIndex + 1, sourceDocuments.length, sourcePath);
     const mainText = sourceText(sourcePath);
@@ -152,6 +184,7 @@ async function main() {
     }
     process.stdout.write('\n['+(APPLY?'SAVED':'PREVIEW')+'] ' + sourcePath + ' — ' + savedTargets + ' destination file(s) updated\n');
   }
+  if (!STAGE3_ONLY && !STAGE2_ONLY) backup(1);
   const destinations = [...state.values()];
   if (!STAGE3_ONLY) {
   console.log('[STAGE 2/'+stages+'] Reading, deduplicating, and writing destination documentation');
@@ -164,16 +197,19 @@ async function main() {
     }
     target.text = merged;
     if (!target.exists && !report.updates.some(update=>update.target===target.name)) continue;
+    let raw;
     try {
       console.log('\n[DEDUP REVIEW] '+target.name);
-      const {plan} = await askModel(duplicatePrompt(target.name,merged,resolvePrompt('stage2', settings.prompts)), 2);
-      const result = applyDuplicates(merged,plan);
-      (report.deduplication ||= []).push({target:target.name,removed:result.removed,skipped:result.skipped,recommendations:result.recommendations});
+      const response = await askModel(duplicatePrompt(target.name,merged,resolvePrompt('stage2', settings.prompts)), 2);
+      raw = response.raw;
+      const result = applyDuplicates(merged,raw,response.finishReason);
+      (report.deduplication ||= []).push({target:target.name,changed:result.changed});
       target.text = result.text;
       if (APPLY && result.text !== merged) fs.writeFileSync(target.file,result.text,'utf8');
-      console.log('[DEDUP '+(APPLY?'SAVED':'PREVIEW')+'] '+target.name+' — '+result.removed+' duplicate blocks removed');
-    } catch(error) { report.errors.push({stage:2,target:target.name,error:error.message}); console.error('\n[DEDUP ERROR] '+target.name+': '+error.message); }
+      console.log('[DEDUP '+(APPLY?'SAVED':'PREVIEW')+'] '+target.name+' — '+(result.changed?'deduplicated document':'unchanged'));
+    } catch(error) { report.errors.push({stage:2,target:target.name,error:error.message,raw}); console.error('\n[DEDUP ERROR] '+target.name+': '+error.message); }
   }
+  backup(2);
   }
   if (reader) {
     console.log('\n[STAGE 3/3] Comparing documentation with read-only code sources');
@@ -192,6 +228,7 @@ async function main() {
       } catch(error) { report.errors.push({stage:3,target:target.name,error:error.message}); console.error('\n[REVIEW ERROR] '+target.name+': '+error.message); }
     }
   }
+  if (reader) backup(3);
   console.log(JSON.stringify(report, null, 2));
   if (report.errors.length) process.exitCode = 1;
 }
