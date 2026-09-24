@@ -6,6 +6,7 @@
     "audit:ui": "node automation_tests/child-interface-audit.cjs",
     "audit:report": "node automation_tests/generate-html-report.cjs",
     "audit:ui:report": "node automation_tests/child-interface-audit.cjs && node automation_tests/generate-html-report.cjs",
+    "audit:accounts": "node automation_tests/run-account-matrix.cjs",
     "test": "node --test"
   },
   "devDependencies": {

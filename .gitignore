@@ -5,3 +5,4 @@ test-accounts.yml
 automation_tests/credentials.yml
 automation_tests/automation-settings.yml
 automation_tests/[0-9]*-*/
+automation_tests/[0-9]*-account-matrix.json

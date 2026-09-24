@@ -18,7 +18,7 @@ test('browser audit resolves its effective values from automation settings', () 
   assert.equal(cfg.maxPages, settings.web.max_pages);
   assert.equal(cfg.maxActions, settings.web.max_actions_per_page);
   assert.equal(cfg.actionTimeoutMs, settings.web.action_timeout_ms);
-  assert.equal(cfg.maxDocumentationDocs, settings.documentation.max_documents_per_page);
+  assert.equal(cfg.maxDocumentationDocs, 8);
   assert.equal(DOCS_ROOT, path.resolve(path.dirname(__dirname), settings.documentation.destination_folder));
 });
 

@@ -1,9 +1,11 @@
-param([switch]$Apply, [string]$Settings = 'automation_tests/automation-settings.yml')
+param([switch]$Preview, [switch]$Apply, [string]$Settings = 'automation_tests/automation-settings.yml', [string]$SourceFile)
 $ErrorActionPreference = 'Stop'
+if ($Preview -and $Apply) { throw 'Use either -Preview or -Apply, not both.' }
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $root
 if (-not (Test-Path -LiteralPath $Settings)) { $Settings = 'automation_tests/automation-settings.yml.example' }
 $env:AUTOMATION_SETTINGS = (Resolve-Path -LiteralPath $Settings)
-$args = @('temporary-categorize-main-docs.cjs')
-if ($Apply) { $args += '--apply' }
-& node @args
+$categorizeArgs = @('temporary-categorize-main-docs.cjs')
+if (-not $Preview) { $categorizeArgs += '--apply' }
+if ($SourceFile) { $categorizeArgs += @('--source-file', $SourceFile) }
+& node @categorizeArgs
