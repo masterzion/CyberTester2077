@@ -23,6 +23,47 @@ Use `-SkipBrowser` (PowerShell) or `--skip-browser` (Bash) for documentation-onl
 
 ## Configuration
 
+Edit the prompts directly in `automation_tests/automation-settings.yml`:
+
+```yaml
+prompts:
+  stage1: |-
+    Instructions for detailed documentation classification...
+  stage2: |-
+    Instructions for identifying duplicated information...
+  stage3: |-
+    Instructions for comparing documentation with source code...
+```
+
+The actual configuration contains the complete prompts, including response schemas.
+Preserve those schemas when editing because the scripts validate the responses.
+Destination descriptions, current documents, source content, code roots, and tool
+results are attached automatically; no placeholders are needed. If a stage key is
+omitted, the script uses its versioned default in `stage-prompts.yml`. Blank prompts
+are rejected. Restart a running script to load edits.
+
+The categorizer supports separate models for each stage under `llm`:
+
+All three categorization stages send `reasoning: "off"` to the LM Studio
+`/api/v1/chat` endpoint. Models that do not support this setting may reject the
+request; the script reports the error rather than silently enabling thinking.
+
+```yaml
+llm:
+  endpoint: "http://192.168.2.110:1234/api/v1/chat"
+  api_key_env: "LLM_API_KEY"
+  model: "google/gemma-3-4b"
+  model_stage1: "google/gemma-3-4b" # Classification
+  model_stage2: "google/gemma-3-4b" # Deduplication
+  model_stage3: "google/gemma-3-4b" # Code review
+```
+
+Set each stage field to the model identifier served by your endpoint. Resolution is
+`MODEL_STAGE1/2/3` environment override, then the corresponding YAML stage field,
+then `MODEL_NAME`, then `llm.model`. The shared endpoint and API key apply to all
+stages. Request logs and the report show the effective stage models. Browser audits
+and their HTML reporter continue to use `llm.model`.
+
 Edit `automation_tests/automation-settings.yml`. It contains:
 
 - `web`: app URL, headless mode, page/action limits, action timeout.
@@ -44,6 +85,56 @@ The configured source folder is read-only. Destination output must be outside it
 Setting `destination_read_write: false` blocks categorizer apply mode.
 
 ## Categorize documentation
+
+Stages use separate responsibilities and instructions:
+
+- Stage 1 uses `prompts.stage1` from the settings file:
+  route source-backed additions by destination filename and content description.
+  It requests detailed consolidation, preserving commands, examples, tables,
+  schemas, constraints, exceptions, implementation status and verification evidence.
+  Each target receives one combined appendix per source, with source attribution.
+  Every destination `content` description is sent in full and defines required
+  coverage: all related source explanations, rationale, workflows, examples and
+  qualifications must be preserved. A broad existing summary is not sufficient
+  reason to skip more detailed source content. This is a model instruction, not
+  an automatic proof of completeness; generated output still requires review.
+- Stage 2 uses `prompts.stage2` from the settings file to identify duplicate
+  blocks. The host removes only proposed blocks equal after whitespace normalization,
+  preserving case, numbers, commands, headings and provenance. Similar passages
+  with differing details remain and are reported as recommendations. Documents
+  containing fenced code are conservatively retained. Invalid responses preserve
+  the document and are recorded as errors.
+- Stage 3 uses `prompts.stage3` from the settings file: discover file IDs,
+  read code, compare documentation claims, and return findings with line citations.
+  Its examples distinguish literal searches from regular expressions and require
+  discovered file IDs rather than numeric root IDs.
+
+Run only the code-review stage against existing configured destination documents:
+`./run-categorize-docs.ps1 -Stage3Only`. Add `-Preview` for no writes.
+Node and Bash accept `--stage3-only` (plus `--apply` to save).
+This requires `code.code_review: true` and cannot be combined with `-SourceFile`.
+Stages 1 and 2 are skipped; existing documents receive code-review findings.
+
+When `code.code_review: true`, a third stage reviews each populated configured
+destination against the folders in `code.source_folder`. `source_read_only: true`
+is required for code access (omission also defaults to read-only).
+The model requests recursive filename searches (`find`), literal text searches
+(`grep`), and numbered line ranges (`read`). These are host-controlled operations;
+no shell commands or source changes are executed. File IDs use the configured
+root index, for example `0/src/example.ts:12`.
+
+Stage 3 appends a dated review to each document with implemented, partial, todo,
+recommended, divergent, or unverified findings and code citations. Unsupported
+status claims are downgraded to unverified. Static review does not prove runtime
+success. Existing documentation remains available alongside review findings.
+Preview includes findings in the printed report without writing destination files.
+
+Reviews are bounded to 12 tool rounds per document, four requests per round,
+100 filename matches per page, 80 search matches, and 120 lines per read.
+Files larger than 1 MiB, symbolic links, dependency/build directories, and common
+secret filenames are excluded. Search results expose truncation and skipped files;
+limited coverage must be treated as uncertainty, not proof that a feature is absent.
+Missing configured code folders fail validation before documentation processing.
 
 From the repository root, apply all source documents:
 
@@ -72,12 +163,13 @@ bash scripts/run-categorize-docs.sh --source-file role-branding.md --apply
 node temporary-categorize-main-docs.cjs --source-file role-branding.md --apply
 ```
 
-Stage 1 reads selected source Markdown files one at a time and stages model
-appendices in memory. Each request includes the allowed filenames, their full
-content descriptions, existence status, and current destination content.
-Stage 2 merges additions and deduplicates each configured destination in sequence.
-Terminal progress bars show both stages. Interrupting stage 1 loses its in-memory
-additions; destination files are written during stage 2.
+Stage 1 reads selected source Markdown files one at a time. After each source is
+classified, its accepted appendices are written immediately to the configured
+destination files, so completed source work remains available if a later request
+fails or the process is interrupted. Each request includes the allowed filenames,
+their full content descriptions, existence status, and current destination content.
+Stage 2 reads every configured destination in sequence and removes exact duplicate
+paragraphs while preserving unique content. Terminal progress output shows both stages.
 
 The current ten destinations are:
 
@@ -99,9 +191,9 @@ Change `documentation.destination_files` to change this list. Each item uses
 when source-backed additions are returned. It does not require pre-created files.
 Preview never creates destination files.
 
-Deduplication currently removes repeated substantial paragraphs after normalizing
-whitespace and capitalization. It is not semantic reconciliation: similar passages,
-short repeated blocks, and conflicts may remain and require review. The model is
+Deduplication asks the model to identify repetitions and verifies equality after
+whitespace normalization before removal. Case and numbers remain significant.
+Similar passages and conflicts may remain and require review. The model is
 instructed to preserve detail, distinguish implemented work from proposals, and
 report uncertainty. Review generated text against its sources before relying on it.
 
