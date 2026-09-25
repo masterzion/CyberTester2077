@@ -22,23 +22,23 @@ async function getNarrative(progress, interactions, observations) {
   const body = await response.json(); const content = (body.output && body.output[0] && body.output[0].content) || body.output || body.response || (body.choices && body.choices[0] && body.choices[0].message.content) || '';
   return safeHtml(Array.isArray(content) ? content.map(x => x.text || x.content || '').join('\n') : content);
 }
-async function main() {
-  const dirs = runDirs().sort((left, right) => fs.statSync(left).mtimeMs - fs.statSync(right).mtimeMs); if (!dirs.length) throw new Error('No timestamped scan folder exists. Run the audit first.');
+async function main(options = {}) {
+  const dirs = options.dir ? [options.dir] : runDirs().sort((left, right) => fs.statSync(left).mtimeMs - fs.statSync(right).mtimeMs); if (!dirs.length) throw new Error('No timestamped scan folder exists. Run the audit first.');
   const dir = dirs[dirs.length - 1], id = path.relative(ROOT, dir).split(path.sep).join('/'), progress = read(path.join(dir, 'live-progress.json'), { results: [], interactions: [], pages: [] }), interactions = read(path.join(dir, 'interaction-results.json'), progress.interactions || []), observations = read(path.join(dir, 'model-observations.json'), []);
   const relative = file => file ? path.relative(dir, file).split(path.sep).join('/') : '';
   const timing = read(path.join(dir, 'execution-timing.json'), null);
   const consoleEvents = read(path.join(dir, 'console-events.json'), progress.console || []);
   const rows = interactions.map(x => ({ status: x.result && x.result.status || 'INFO', component: x.control && (x.control.label || x.control.id) || 'Unknown component', detail: x.result && x.result.detail || '', screenshot: relative(x.screenshot) })).concat((progress.results || []).filter(x => !x.extra || !x.extra.screenshot).map(x => ({ status: x.status, component: x.name, detail: x.detail, screenshot: '' })));
   let modelHtml;
-  if (process.argv.includes('--offline')) {
+  if (options.offline || process.argv.includes('--offline')) {
     modelHtml = '<p>Generated from saved audit evidence. No new model analysis was requested. Review flagged outcomes and screenshots below.</p>';
   } else {
     try { console.log('[MODEL] Creating HTML QA/design narrative with ' + model); modelHtml = await getNarrative(progress, interactions, observations); } catch (error) { modelHtml = '<p><strong>Model narrative unavailable.</strong> ' + esc(error.message) + '</p>'; }
   }
   const summary = { pages: (progress.pages || []).length, components: interactions.length, passed: rows.filter(x => x.status === 'PASS').length, failed: rows.filter(x => x.status === 'FAIL').length, warnings: rows.filter(x => x.status === 'WARN').length };
-  const account = observations.find(x => x.account) || {};
+  const account = observations.find(x => x.account) || progress.account || {};
   const metadata = { account: account.account || 'Account audit', role: account.role || 'Not recorded', platform: path.basename(dir), generated: new Date().toLocaleString(), run: id };
-  metadata.timing = timing;
+  metadata.timing = timing || progress.timing;
   metadata.firstEvent = (progress.results || []).find(x => x.at)?.at;
   metadata.lastEvent = (progress.results || []).filter(x => x.at).at(-1)?.at;
   metadata.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -50,7 +50,10 @@ async function main() {
   const values = { RUN_ID: esc(id), GENERATED_AT: esc(metadata.generated), MODEL_HTML: esc(modelHtml), SUMMARY_JSON: json(summary), ROWS_JSON: json(rows), MODELS_JSON: json(observations), META_JSON: json(metadata) };
   const template = fs.readFileSync(TEMPLATE, 'utf8');
   const html = template.replace(/{{([A-Z_]+)}}/g, (_, key) => values[key] ?? '');
-  const file = path.join(dir, 'interactive-report.html'); fs.writeFileSync(file, html); console.log('Interactive report: ' + file);
+  const file = path.join(dir, 'interactive-report.html');
+  fs.writeFileSync(file + '.tmp', html);
+  fs.renameSync(file + '.tmp', file);
+  if (!options.quiet) console.log('Interactive report: ' + file);
 }
 if (require.main === module) main().catch(error => { console.error(error); process.exitCode = 1; });
-module.exports = { modelUrl, model, settings };
+module.exports = { modelUrl, model, settings, renderReport: main };
