@@ -6,7 +6,7 @@ const ROOT = __dirname, TEMPLATE = path.join(ROOT, 'report-template.html');
 const settingsFile = process.env.AUTOMATION_SETTINGS || (fs.existsSync(path.join(ROOT, 'automation-settings.yml')) ? path.join(ROOT, 'automation-settings.yml') : path.join(ROOT, 'automation-settings.yml.example'));
 const settings = YAML.parse(fs.readFileSync(settingsFile, 'utf8')) || {};
 const modelUrl = process.env.MODEL_URL || settings.llm?.endpoint || 'http://192.168.2.110:1234/api/v1/chat';
-const model = process.env.MODEL_NAME || settings.llm?.model || 'ornith-1.5-35b-a3b';
+const model = process.env.MODEL_NAME || settings.llm?.playwright_model || 'ornith-1.5-35b-a3b';
 const apiKey = process.env[settings.llm?.api_key_env || 'LLM_API_KEY'];
 const nativeFetch = global.fetch;
 global.fetch = (url, options = {}) => nativeFetch(url, { ...options, headers: { ...(options.headers || {}), ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) } });
@@ -26,10 +26,30 @@ async function main() {
   const dirs = runDirs().sort((left, right) => fs.statSync(left).mtimeMs - fs.statSync(right).mtimeMs); if (!dirs.length) throw new Error('No timestamped scan folder exists. Run the audit first.');
   const dir = dirs[dirs.length - 1], id = path.relative(ROOT, dir).split(path.sep).join('/'), progress = read(path.join(dir, 'live-progress.json'), { results: [], interactions: [], pages: [] }), interactions = read(path.join(dir, 'interaction-results.json'), progress.interactions || []), observations = read(path.join(dir, 'model-observations.json'), []);
   const relative = file => file ? path.relative(dir, file).split(path.sep).join('/') : '';
+  const timing = read(path.join(dir, 'execution-timing.json'), null);
+  const consoleEvents = read(path.join(dir, 'console-events.json'), progress.console || []);
   const rows = interactions.map(x => ({ status: x.result && x.result.status || 'INFO', component: x.control && (x.control.label || x.control.id) || 'Unknown component', detail: x.result && x.result.detail || '', screenshot: relative(x.screenshot) })).concat((progress.results || []).filter(x => !x.extra || !x.extra.screenshot).map(x => ({ status: x.status, component: x.name, detail: x.detail, screenshot: '' })));
-  let modelHtml; try { console.log('[MODEL] Creating HTML QA/design narrative with ' + model); modelHtml = await getNarrative(progress, interactions, observations); } catch (error) { modelHtml = '<p><strong>Model narrative unavailable.</strong> ' + esc(error.message) + '</p>'; }
+  let modelHtml;
+  if (process.argv.includes('--offline')) {
+    modelHtml = '<p>Generated from saved audit evidence. No new model analysis was requested. Review flagged outcomes and screenshots below.</p>';
+  } else {
+    try { console.log('[MODEL] Creating HTML QA/design narrative with ' + model); modelHtml = await getNarrative(progress, interactions, observations); } catch (error) { modelHtml = '<p><strong>Model narrative unavailable.</strong> ' + esc(error.message) + '</p>'; }
+  }
   const summary = { pages: (progress.pages || []).length, components: interactions.length, passed: rows.filter(x => x.status === 'PASS').length, failed: rows.filter(x => x.status === 'FAIL').length, warnings: rows.filter(x => x.status === 'WARN').length };
-  const template = fs.readFileSync(TEMPLATE, 'utf8'); const html = template.replaceAll('{{RUN_ID}}', id).replace('{{GENERATED_AT}}', new Date().toLocaleString()).replace('{{MODEL_HTML}}', modelHtml).replace('{{SUMMARY_JSON}}', JSON.stringify(summary)).replace('{{ROWS_JSON}}', JSON.stringify(rows)).replace('{{MODELS_JSON}}', JSON.stringify(observations));
+  const account = observations.find(x => x.account) || {};
+  const metadata = { account: account.account || 'Account audit', role: account.role || 'Not recorded', platform: path.basename(dir), generated: new Date().toLocaleString(), run: id };
+  metadata.timing = timing;
+  metadata.firstEvent = (progress.results || []).find(x => x.at)?.at;
+  metadata.lastEvent = (progress.results || []).filter(x => x.at).at(-1)?.at;
+  metadata.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  metadata.errors = [
+    ...(progress.results || []).filter(x => ['FAIL','WARN'].includes(x.status)).map(x => ({at:x.at, status:x.status, source:x.name, message:x.detail || x.extra?.error || '', url:x.extra?.url || ''})),
+    ...consoleEvents.filter(x => ['error','pageerror','warning','warn'].includes(x.level)).map(x => ({at:x.at, status:['error','pageerror'].includes(x.level)?'FAIL':'WARN', source:'Browser '+x.level, message:x.text || x.message || '', url:x.url || ''}))
+  ].sort((a,b) => String(a.at || '').localeCompare(String(b.at || '')));
+  const json = value => JSON.stringify(value).replace(/</g, '\\u003c');
+  const values = { RUN_ID: esc(id), GENERATED_AT: esc(metadata.generated), MODEL_HTML: esc(modelHtml), SUMMARY_JSON: json(summary), ROWS_JSON: json(rows), MODELS_JSON: json(observations), META_JSON: json(metadata) };
+  const template = fs.readFileSync(TEMPLATE, 'utf8');
+  const html = template.replace(/{{([A-Z_]+)}}/g, (_, key) => values[key] ?? '');
   const file = path.join(dir, 'interactive-report.html'); fs.writeFileSync(file, html); console.log('Interactive report: ' + file);
 }
 if (require.main === module) main().catch(error => { console.error(error); process.exitCode = 1; });

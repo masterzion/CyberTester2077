@@ -20,7 +20,7 @@ settings.documentation.source_folder = path.join(run,'source');
 settings.documentation.destination_folder = path.join(run,'destination');
 const config = path.join(run,'settings.yml');
 fs.writeFileSync(config,YAML.stringify(settings));
-console.log(JSON.stringify({source:smallest,bytes:fs.statSync(smallest).size,model:settings.llm.model,run}));
+console.log(JSON.stringify({source:smallest,bytes:fs.statSync(smallest).size,model:settings.llm.playwright_model,run}));
 const result = spawnSync(process.execPath,[path.join(root,'temporary-categorize-main-docs.cjs'),'--apply'],{cwd:root,env:{...process.env,AUTOMATION_SETTINGS:config,AUTOMATION_CREDENTIALS:path.join(run,'no-credentials.yml')},encoding:'utf8',timeout:240000});
 fs.writeFileSync(path.join(run,'run.log'),(result.stdout||'')+'\n'+(result.stderr||''));
 console.log(result.stdout||'',result.stderr||'');

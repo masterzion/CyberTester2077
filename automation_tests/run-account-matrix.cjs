@@ -5,10 +5,18 @@ const { spawnSync } = require('node:child_process');
 const YAML = require('yaml');
 
 const ROOT = path.resolve(__dirname, '..');
+const OUTPUT_ROOT = path.join(__dirname, 'output');
 const settingsFile = process.env.AUTOMATION_SETTINGS || (fs.existsSync(path.join(__dirname, 'automation-settings.yml')) ? path.join(__dirname, 'automation-settings.yml') : path.join(__dirname, 'automation-settings.yml.example'));
 const credentialsFile = process.env.AUTOMATION_CREDENTIALS || path.join(__dirname, 'credentials.yml');
 const settings = YAML.parse(fs.readFileSync(settingsFile, 'utf8')) || {};
 const safePathPart = value => String(value || 'unknown').replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'unknown';
+function localTimestamp(date) {
+  const offset = -date.getTimezoneOffset();
+  const sign = offset >= 0 ? '+' : '-';
+  const hours = String(Math.floor(Math.abs(offset) / 60)).padStart(2, '0');
+  const minutes = String(Math.abs(offset) % 60).padStart(2, '0');
+  return date.toLocaleString('sv-SE') + ' ' + sign + hours + ':' + minutes;
+}
 const runId = new Date().toISOString().replace(/[:.]/g, '-');
 const requested = new Set(process.argv.slice(2));
 const includeWeb = !requested.size || requested.has('--web');
@@ -47,19 +55,26 @@ function runAudit(account, platform, profile) {
     AUDIT_ACCOUNT_DESCRIPTION: account.description || ''
   };
   console.log('\n[START] ' + platform + (profile ? ' / ' + profile.name : '') + ' — ' + account.name + ' (' + account.role + ')');
+  const startedAt = new Date().toISOString();
   const passed = invoke('child-interface-audit.cjs', env);
-  const output = path.join(__dirname, runId + '-' + safePathPart(account.role), safePathPart(account.email), platform + (profile ? '-' + safePathPart(profile.name) : ''));
+  const finishedAt = new Date().toISOString();
+  const output = path.join(OUTPUT_ROOT, runId + '-' + safePathPart(account.role), safePathPart(account.email), platform + (profile ? '-' + safePathPart(profile.name) : ''));
+  fs.mkdirSync(output, { recursive: true });
+  fs.writeFileSync(path.join(output, 'execution-timing.json'), JSON.stringify({ startedAt, finishedAt, durationSeconds: (Date.parse(finishedAt)-Date.parse(startedAt))/1000, status: passed ? 'completed' : 'failed', scope: 'This account and platform; excludes report generation' }, null, 2));
   if (fs.existsSync(output)) invoke('generate-html-report.cjs', { REPORT_RUN_DIR: output });
   return { status: passed ? 'PASS' : 'FAIL', output };
 }
 
 function main() {
+  const startedAt = new Date();
+  const startedMs = Date.now();
   if (!fs.existsSync(credentialsFile)) throw new Error('Credentials file not found: ' + credentialsFile + '. Copy credentials.yml.example to credentials.yml and set its password_env values in .env.');
   loadDotEnv();
   const accounts = (YAML.parse(fs.readFileSync(credentialsFile, 'utf8')) || {}).accounts;
   if (!Array.isArray(accounts)) throw new Error('credentials.yml must contain an accounts list.');
   const profiles = Array.isArray(settings.mobile?.screen_profiles) ? settings.mobile.screen_profiles : [];
-  console.log('[CONFIG] settings=' + settingsFile + ' credentials=' + credentialsFile + ' app_url=' + (settings.web?.app_url || '') + ' model=' + (settings.llm?.model || '') + ' mobile_enabled=' + (settings.mobile?.enabled === true) + ' mobile_profiles=' + profiles.map(profile => profile.name + ':' + profile.width + 'x' + profile.height).join(','));
+  console.log('[RUN START] ' + localTimestamp(startedAt));
+  console.log('[CONFIG] settings=' + settingsFile + ' credentials=' + credentialsFile + ' app_url=' + (settings.web?.app_url || '') + ' model=' + (settings.llm?.playwright_model || '') + ' mobile_enabled=' + (settings.mobile?.enabled === true) + ' mobile_profiles=' + profiles.map(profile => profile.name + ':' + profile.width + 'x' + profile.height).join(','));
   const results = [];
   for (const account of accounts) {
     if (!account.name || !account.role || !account.email) { console.error('[SKIP] invalid account entry'); continue; }
@@ -72,8 +87,13 @@ function main() {
   }
   const failed = results.filter(item => item.status === 'FAIL').length;
   const skipped = results.filter(item => item.status === 'SKIP').length;
-  const manifest = path.join(__dirname, runId + '-account-matrix.json');
-  fs.writeFileSync(manifest, JSON.stringify({ runId, settingsFile, credentialsFile, results }, null, 2));
+  const manifest = path.join(OUTPUT_ROOT, runId + '-account-matrix.json');
+  fs.mkdirSync(OUTPUT_ROOT, { recursive: true });
+  const finishedAt = new Date();
+  const durationSeconds = (Date.now() - startedMs) / 1000;
+  fs.writeFileSync(manifest, JSON.stringify({ runId, startedAt: localTimestamp(startedAt), finishedAt: localTimestamp(finishedAt), durationSeconds, settingsFile, credentialsFile, results }, null, 2));
+  console.log('\n[RUN FINISH] ' + localTimestamp(finishedAt));
+  console.log('[RUN DURATION] ' + durationSeconds.toFixed(3) + ' seconds (' + (durationSeconds / 60).toFixed(2) + ' minutes)');
   console.log('\nAccount matrix: ' + manifest + '\nPassed: ' + results.filter(item => item.status === 'PASS').length + ', failed: ' + failed + ', skipped: ' + skipped);
   if (failed || skipped) process.exitCode = 1;
 }
