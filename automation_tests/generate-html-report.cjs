@@ -60,8 +60,7 @@ async function main(options = {}) {
   const template = fs.readFileSync(TEMPLATE, 'utf8');
   const html = template.replace(/{{([A-Z_]+)}}/g, (_, key) => values[key] ?? '');
   const file = path.join(dir, 'interactive-report.html');
-  fs.writeFileSync(file + '.tmp', html);
-  fs.renameSync(file + '.tmp', file);
+  await require('./report-file-writer.cjs').writeReport(file, html);
   if (!options.quiet) console.log('Interactive report: ' + file);
 }
 if (require.main === module) main().catch(error => { console.error(error); process.exitCode = 1; });
