@@ -37,7 +37,7 @@ async function main(options = {}) {
   const relative = file => file ? path.relative(dir, file).split(path.sep).join('/') : '';
   const timing = read(path.join(dir, 'execution-timing.json'), null);
   const consoleEvents = read(path.join(dir, 'console-events.json'), progress.console || []);
-  const rows = groupSkippedRows(interactions.map(x => ({ status: x.result && x.result.status || 'INFO', component: x.control && (x.control.label || x.control.id) || 'Unknown component', detail: x.result && x.result.detail || '', screenshot: relative(x.screenshot) })).concat((progress.results || []).filter(x => !x.extra || !x.extra.screenshot).map(x => ({ status: x.status, component: x.name, detail: x.detail, screenshot: '' }))));
+  const rows = groupSkippedRows(interactions.map(x => ({ status: x.result && x.result.status || 'INFO', component: x.control && (x.control.label || x.control.id) || 'Unknown component', detail: x.result && x.result.detail || '', url: x.pageUrl || '', screenshot: relative(x.screenshot) })).concat((progress.results || []).filter(x => !x.extra || !x.extra.screenshot).map(x => ({ status: x.status, component: x.name, detail: x.detail, url: x.extra?.url || '', screenshot: '' }))));
   let modelHtml;
   if (options.offline || process.argv.includes('--offline')) {
     modelHtml = '<p>Generated from saved audit evidence. No new model analysis was requested. Review flagged outcomes and screenshots below.</p>';
@@ -52,7 +52,7 @@ async function main(options = {}) {
   metadata.lastEvent = (progress.results || []).filter(x => x.at).at(-1)?.at;
   metadata.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   metadata.errors = [
-    ...(progress.results || []).filter(x => ['FAIL','WARN'].includes(x.status)).map(x => ({at:x.at, status:x.status, source:x.name, message:x.detail || x.extra?.error || '', url:x.extra?.url || ''})),
+    ...(progress.results || []).filter(x => ['FAIL','WARN'].includes(x.status)).map(x => ({at:x.at, status:x.status, source:x.name, message:x.detail || x.extra?.error || '', url:x.extra?.url || (x.extra?.screenshot ? interactions.find(i => i.screenshot === x.extra.screenshot)?.pageUrl : '') || ''})),
     ...consoleEvents.filter(x => ['error','pageerror','warning','warn'].includes(x.level)).map(x => ({at:x.at, status:['error','pageerror'].includes(x.level)?'FAIL':'WARN', source:'Browser '+x.level, message:x.text || x.message || '', url:x.url || ''}))
   ].sort((a,b) => String(a.at || '').localeCompare(String(b.at || '')));
   const json = value => JSON.stringify(value).replace(/</g, '\\u003c');
