@@ -52,7 +52,8 @@ function runAudit(account, platform, profile) {
     CHILD_PASSWORD: password,
     AUDIT_ACCOUNT_NAME: account.name,
     AUDIT_ACCOUNT_ROLE: account.role,
-    AUDIT_ACCOUNT_DESCRIPTION: account.description || ''
+    AUDIT_ACCOUNT_DESCRIPTION: account.description || '',
+    AUDIT_LOGIN_TIMEOUT_MS: String(Number(account.login_timeout_seconds ?? 20) * 1000)
   };
   console.log('\n[START] ' + platform + (profile ? ' / ' + profile.name : '') + ' — ' + account.name + ' (' + account.role + ')');
   const startedAt = new Date().toISOString();
