@@ -13,6 +13,15 @@ global.fetch = (url, options = {}) => nativeFetch(url, { ...options, headers: { 
 if (require.main === module) console.log('[CONFIG] settings=' + settingsFile + ' model=' + model + ' endpoint=' + modelUrl);
 function read(file, fallback) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } }
 function esc(value) { return String(value || '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;', "'":'&#39;' })[c]); }
+function groupSkippedRows(rows) {
+  const skipped = rows.filter(row => row.status === 'SKIP');
+  if (!skipped.length) return rows;
+  const reasons = new Map();
+  for (const row of skipped) reasons.set(row.detail || 'Unspecified', (reasons.get(row.detail || 'Unspecified') || 0) + 1);
+  const grouped = {status:'SKIP', component:'Skipped controls ('+skipped.length+' events)', detail:[...reasons].map(([reason,count]) => count+' × '+reason).join('; '), screenshot:'', count:skipped.length};
+  let added = false;
+  return rows.flatMap(row => row.status !== 'SKIP' ? [row] : added ? [] : (added = true, [grouped]));
+}
 function safeHtml(value) { return String(value || '').replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<style[\s\S]*?<\/style>/gi, '').replace(/on\w+\s*=\s*(['"]).*?\1/gi, ''); }
 function runDirs(dir = ROOT) { if (dir === ROOT && process.env.REPORT_RUN_DIR) return [path.resolve(process.env.REPORT_RUN_DIR)]; return fs.readdirSync(dir, { withFileTypes: true }).flatMap(item => { const file = path.join(dir, item.name); if (!item.isDirectory()) return []; if (fs.existsSync(path.join(file, 'live-progress.json'))) return [file]; return runDirs(file); }); }
 async function getNarrative(progress, interactions, observations) {
@@ -28,7 +37,7 @@ async function main(options = {}) {
   const relative = file => file ? path.relative(dir, file).split(path.sep).join('/') : '';
   const timing = read(path.join(dir, 'execution-timing.json'), null);
   const consoleEvents = read(path.join(dir, 'console-events.json'), progress.console || []);
-  const rows = interactions.map(x => ({ status: x.result && x.result.status || 'INFO', component: x.control && (x.control.label || x.control.id) || 'Unknown component', detail: x.result && x.result.detail || '', screenshot: relative(x.screenshot) })).concat((progress.results || []).filter(x => !x.extra || !x.extra.screenshot).map(x => ({ status: x.status, component: x.name, detail: x.detail, screenshot: '' })));
+  const rows = groupSkippedRows(interactions.map(x => ({ status: x.result && x.result.status || 'INFO', component: x.control && (x.control.label || x.control.id) || 'Unknown component', detail: x.result && x.result.detail || '', screenshot: relative(x.screenshot) })).concat((progress.results || []).filter(x => !x.extra || !x.extra.screenshot).map(x => ({ status: x.status, component: x.name, detail: x.detail, screenshot: '' }))));
   let modelHtml;
   if (options.offline || process.argv.includes('--offline')) {
     modelHtml = '<p>Generated from saved audit evidence. No new model analysis was requested. Review flagged outcomes and screenshots below.</p>';
@@ -56,4 +65,4 @@ async function main(options = {}) {
   if (!options.quiet) console.log('Interactive report: ' + file);
 }
 if (require.main === module) main().catch(error => { console.error(error); process.exitCode = 1; });
-module.exports = { modelUrl, model, settings, renderReport: main };
+module.exports = { modelUrl, model, settings, renderReport: main, groupSkippedRows };
