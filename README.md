@@ -56,7 +56,8 @@ llm:
   model_stage1: "google/gemma-3-4b" # Classification
   model_stage2: "google/gemma-3-4b" # Deduplication
   model_stage3: "google/gemma-3-4b" # Code review
-  model: "google/gemma-3-4b" # Optional fallback and browser-audit model
+  model: "google/gemma-3-4b" # Optional categorization fallback
+  playwright_model: "gemma-4-e4b-it" # Browser audits and HTML reporter
 ```
 
 Set each stage field to the model identifier served by your endpoint. Resolution is
@@ -64,8 +65,8 @@ Set each stage field to the model identifier served by your endpoint. Resolution
 then `MODEL_NAME`, then `llm.model`. The shared endpoint and API key apply to all
 stages. Request logs and the report show the effective stage models. The fallback
 `llm.model` is optional for categorization when every `model_stage*` value is set,
-but the Playwright audit scripts and HTML reporter still use `MODEL_NAME` or
-`llm.model`; keep it configured when running browser audits.
+but the Playwright audit scripts and HTML reporter use `MODEL_NAME` or
+`llm.playwright_model`; configure the latter when running browser audits.
 
 Edit `automation_tests/automation-settings.yml`. It contains:
 
@@ -73,6 +74,7 @@ Edit `automation_tests/automation-settings.yml`. It contains:
 - `llm`: endpoint, model name, and the environment-variable name containing the API key.
 - `documentation`: source folder, destination folder, and destination file definitions.
 - `mobile`: responsive screen profiles and an enabled flag.
+- `upload_images`: local test-image folder and random image count per upload.
 
 `AUTOMATION_SETTINGS` can select another settings file. `MODEL_STAGE1`,
 `MODEL_STAGE2`, `MODEL_STAGE3`, `MODEL_NAME`, and `MODEL_URL` override YAML for a
@@ -233,9 +235,11 @@ Create the local ignored credentials file if it does not exist:
 Copy-Item automation_tests/credentials.yml.example automation_tests/credentials.yml
 ```
 
-Each account contains `name`, `role`, `description`, `email`, `password_env`,
-`runtest_web`, and `runtest_mobile`. Add the named secret variables to the
-repository-root `.env` or your process environment. For example:
+Each account contains `name`, `role`, `description`, `email`, `runtest_web`, and
+`runtest_mobile`. Supply either `password_env` or a `password` in the ignored local
+credentials file. When `password_env` is present, its environment value takes
+precedence. Add named secret variables to the repository-root `.env` or your
+process environment. For example:
 
 ```dotenv
 KIDVERSE_ELZA_PASSWORD=your-test-account-password
@@ -246,6 +250,12 @@ The account runner loads `.env`; existing process variables take precedence.
 Standalone categorization and report commands currently read API keys from the
 process environment, so export the variable named by `llm.api_key_env` for those
 commands. Keep secrets out of tracked YAML and logs.
+
+Set `login_timeout_seconds` per account (default: 20). For example, use 120 for an
+account whose first access requires compilation. This is a maximum wait, not a
+fixed delay, and also sets that account's interaction timeout. Page readiness
+waits for the load event and a visible body, not network inactivity; individual
+actions still wait for actionable controls.
 
 Run the selected accounts:
 
@@ -273,16 +283,64 @@ description. The executor currently uses built-in interactions ordered by model
 suggestions; a successful interaction is not proof that every model acceptance
 criterion passed. Coverage is bounded by configured limits and excluded actions.
 
+### Form, social, and chat interactions
+
+The executor prioritizes input controls before Save, Send, Post, Publish, Share,
+and other submission buttons. It supports text and rich-text entry, dates,
+checkboxes, radio buttons, selects, and image inputs. Where eligible empty forms
+are found, it first tries an empty submission or records a disabled submit button,
+then fills test values and tries submission again. Existing populated drafts are
+not cleared to manufacture empty-form scenarios. Input interactions use marked
+QA text; run only against accounts and environments where test writes are allowed.
+
+Language/session controls and destructive actions are excluded in code, not just
+in the model prompt. The runner attempts to dismiss blocking menus with Escape,
+scrolls targets into view, and performs up to three additional scroll/discovery
+passes when no untried controls remain. Model-requested observe actions are skipped.
+
+Submission checks look for browser validation and visible application feedback.
+Expected empty-input validation passes the negative test; an unconfirmed
+submission produces a warning rather than a success claim. These are heuristic
+checks, not proof of persistence or complete end-to-end coverage. Application
+layouts, custom widgets, permissions, and configured action limits can prevent
+completion. Review the report before treating posts or messages as delivered.
+
+### Random image uploads
+
+Add this block to the ignored `automation_tests/automation-settings.yml`:
+
+```yaml
+upload_images:
+  folder: "automation_tests/uploadimagetest"
+  count: 3
+```
+
+Relative paths resolve from the repository root; absolute paths are also accepted.
+Put approved test images in this folder. It is ignored by Git. For each file input,
+the runner randomly selects distinct images compatible with its `accept` attribute.
+Multi-file inputs receive three images together by default. Single-file inputs
+receive one and report the limitation; fewer available compatible images also
+produce a warning. Selection does not recurse into subfolders or follow symlinks.
+Supported extensions are JPG/JPEG, PNG, GIF, WebP, AVIF, BMP, and SVG. Attachment
+does not itself confirm server upload or publication. Selected filenames appear
+in the interaction evidence. Restart the runner after changing configuration.
+
 ## Results and checks
 
 ```text
-automation_tests/[timestamp]-[role]/[sanitized-login]/web/
-automation_tests/[timestamp]-[role]/[sanitized-login]/mobile-[profile]/
+automation_tests/output/[local-timestamp]/[role]/[sanitized-account-name]/web/
+automation_tests/output/[local-timestamp]/[role]/[sanitized-account-name]/mobile-[profile]/
 ```
 
 Run folders contain screenshots, HTML evidence, inventories, observations, results,
-and a generated interactive HTML report when reporting succeeds. The matrix writes
-a timestamped JSON manifest. Matrix PASS currently indicates the audit process
+and an `interactive-report.html` created at startup and updated during execution.
+Refresh the HTML to follow progress. Timing includes start, finish, and elapsed
+duration using the local machine's timezone for display; error evidence includes
+timestamps and URLs when available. Report writes are serialized within the process,
+use unique temporary files, and retry transient Windows file locks. If replacement
+still fails, the previous readable report remains intact and an error is logged.
+The matrix writes `automation_tests/output/[local-timestamp]/account-matrix.json`.
+Matrix PASS currently indicates the audit process
 finished successfully; inspect individual interaction failures in its report.
 
 Run unit tests with `npm test` or `./scripts/run-tests.ps1`. The lower-level
