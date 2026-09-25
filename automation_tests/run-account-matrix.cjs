@@ -17,7 +17,8 @@ function localTimestamp(date) {
   const minutes = String(Math.abs(offset) % 60).padStart(2, '0');
   return date.toLocaleString('sv-SE') + ' ' + sign + hours + ':' + minutes;
 }
-const runId = new Date().toISOString().replace(/[:.]/g, '-');
+const {newRunId, outputDirectory} = require('./output-paths.cjs');
+const runId = newRunId();
 const requested = new Set(process.argv.slice(2));
 const includeWeb = !requested.size || requested.has('--web');
 const includeMobile = !requested.size || requested.has('--mobile');
@@ -59,7 +60,7 @@ function runAudit(account, platform, profile) {
   const startedAt = new Date().toISOString();
   const passed = invoke('child-interface-audit.cjs', env);
   const finishedAt = new Date().toISOString();
-  const output = path.join(OUTPUT_ROOT, runId + '-' + safePathPart(account.role), safePathPart(account.email), platform + (profile ? '-' + safePathPart(profile.name) : ''));
+  const output = outputDirectory(OUTPUT_ROOT, runId, account.role, account.name, account.email, platform, profile?.name);
   fs.mkdirSync(output, { recursive: true });
   fs.writeFileSync(path.join(output, 'execution-timing.json'), JSON.stringify({ startedAt, finishedAt, durationSeconds: (Date.parse(finishedAt)-Date.parse(startedAt))/1000, status: passed ? 'completed' : 'failed', scope: 'This account and platform; excludes report generation' }, null, 2));
   if (fs.existsSync(output)) invoke('generate-html-report.cjs', { REPORT_RUN_DIR: output });
@@ -88,8 +89,8 @@ function main() {
   }
   const failed = results.filter(item => item.status === 'FAIL').length;
   const skipped = results.filter(item => item.status === 'SKIP').length;
-  const manifest = path.join(OUTPUT_ROOT, runId + '-account-matrix.json');
-  fs.mkdirSync(OUTPUT_ROOT, { recursive: true });
+  const manifest = path.join(OUTPUT_ROOT, runId, 'account-matrix.json');
+  fs.mkdirSync(path.dirname(manifest), { recursive: true });
   const finishedAt = new Date();
   const durationSeconds = (Date.now() - startedMs) / 1000;
   fs.writeFileSync(manifest, JSON.stringify({ runId, startedAt: localTimestamp(startedAt), finishedAt: localTimestamp(finishedAt), durationSeconds, settingsFile, credentialsFile, results }, null, 2));
