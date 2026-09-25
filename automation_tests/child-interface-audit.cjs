@@ -8,6 +8,7 @@ const { TESTER_SYSTEM_PROMPT } = require('./tester-system-prompt.cjs');
 const ROOT = path.resolve(__dirname, '..');
 const SETTINGS_FILE = process.env.AUTOMATION_SETTINGS || (fs.existsSync(path.join(__dirname, 'automation-settings.yml')) ? path.join(__dirname, 'automation-settings.yml') : path.join(__dirname, 'automation-settings.yml.example'));
 const settings = YAML.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')) || {};
+const uploadSettings = require('./upload-images.cjs').uploadConfig(settings, ROOT);
 const DOCS_ROOT = path.resolve(ROOT, settings.documentation?.destination_folder || './docs');
 const {newRunId, outputDirectory} = require('./output-paths.cjs');
 const RUN_ID = process.env.AUDIT_RUN_ID || newRunId();
@@ -102,7 +103,7 @@ function skip(control) {
 async function interact(page, control, guided) {
   const why = skip(control);
   if (why) return {status:'SKIP',detail:why};
-  return inputInteractions.performInteraction(page,control,guided,cfg.actionTimeoutMs,'QA TEST '+RUN_ID+' — automated test content');
+  return inputInteractions.performInteraction(page,control,guided,cfg.actionTimeoutMs,'QA TEST '+RUN_ID+' — automated test content',uploadSettings);
 }
 async function login(page) {
   const deadline = Date.now() + cfg.loginTimeoutMs;

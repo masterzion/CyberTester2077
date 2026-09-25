@@ -1,4 +1,6 @@
 'use strict';
+const path = require('node:path');
+const {selectImages} = require('./upload-images.cjs');
 
 const forbidden = /\b(language|locale|translate|translation|logout|log out|sign out|signoff|switch account|delete|remove|destroy|purchase|buy|pay|subscribe|unsubscribe|reset password|revoke|dev tools)\b/i;
 const submitWords = /\b(save|send|post|publish|share|submit|create|add|apply|confirm)\b/i;
@@ -83,7 +85,7 @@ async function probeEmptySubmission(page, c, timeout) {
   if(/saved|sent|posted|published|created|success/i.test(messages)) return {status:state.required.length?'FAIL':'WARN',detail:'Empty-input check: application accepted the submission. '+(state.required.length?'Declared required fields were empty. ':'Confirm whether empty content is allowed. ')+messages,scenario:'empty',requiredFields:state.required};
   return {status:'WARN',detail:'Empty-input check attempted; required-field validation could not be confirmed. '+messages,scenario:'empty',requiredFields:state.required};
 }
-async function performInteraction(page, c, guided, timeout, marker) {
+async function performInteraction(page, c, guided, timeout, marker, uploadSettings) {
   const blocked = exclusion(c);
   if (blocked) return {status:'SKIP',detail:blocked};
   if (guided?.action === 'observe') return {status:'SKIP',detail:'model requested observation: '+(guided.reason || '')};
@@ -91,10 +93,13 @@ async function performInteraction(page, c, guided, timeout, marker) {
   await closeBlockingMenus(page,el);
   if (c.type !== 'file') await el.scrollIntoViewIfNeeded({timeout});
   if (c.type === 'file') {
-    if (c.accept && !/image\/|\.png|\.jpe?g/i.test(c.accept)) return {status:'SKIP',detail:'upload does not accept the synthetic PNG fixture'};
-    // In-memory PNG: no user images are read or uploaded.
-    await el.setInputFiles({name:'qa-test-image.png',mimeType:'image/png',buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=','base64')});
-    return {status:'PASS',detail:'Attached synthetic QA image; submission is a separate step'};
+    const attributes=await el.evaluate(node=>({accept:node.accept,multiple:node.multiple}));
+    const selection=selectImages(uploadSettings,attributes.accept,attributes.multiple);
+    if (!selection.files.length) return {status:'WARN',detail:'No compatible images found in configured upload_images.folder; no files attached'};
+    await el.setInputFiles(selection.files,{timeout});
+    const names=selection.files.map(file=>path.basename(file));
+    const limited=names.length<selection.requested;
+    return {status:limited?'WARN':'PASS',detail:'Attached '+names.length+'/'+selection.requested+' random image(s): '+names.join(', ')+(limited?(selection.singleFile?'; input accepts only one file':'; not enough compatible images'):'')+'; submission is a separate step',uploadedFiles:names};
   }
   if (c.tag === 'select') {
     const option=c.options.find(o=>!o.disabled && o.value && (guided?.value ? o.value===guided.value : !o.selected));

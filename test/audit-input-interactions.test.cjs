@@ -31,8 +31,8 @@ test('browser fixtures: close overlay, fill, upload, send, verify, and respect o
     assert.equal(await page.locator('textarea').inputValue(),'QA TEST message');
     controls=await discoverControls(page);
     const file=controls.find(c=>c.type==='file');
-    assert.equal((await performInteraction(page,file,null,1500,'QA')).status,'PASS');
-    assert.equal(await page.locator('input[type=file]').evaluate(n=>n.files[0].type),'image/png');
+    assert.equal((await performInteraction(page,file,null,1500,'QA',{folder:require('node:path').resolve(__dirname,'../automation_tests/child-audit-fixtures'),count:1})).status,'PASS');
+    assert.equal(await page.locator('input[type=file]').evaluate(n=>n.files[0].type),'image/svg+xml');
     const submit=controls.find(c=>c.type==='submit');
     assert.equal((await performInteraction(page,submit,null,1500,'QA')).status,'PASS');
     assert.equal(await page.locator('textarea').inputValue(),'');
