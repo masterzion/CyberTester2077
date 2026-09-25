@@ -20,6 +20,7 @@ function groupSkippedRows(rows) {
   for (const row of skipped) reasons.set(row.detail || 'Unspecified', (reasons.get(row.detail || 'Unspecified') || 0) + 1);
   const grouped = {status:'SKIP', component:'Skipped controls ('+skipped.length+' events)', detail:[...reasons].map(([reason,count]) => count+' × '+reason).join('; '), screenshot:'', count:skipped.length};
   let added = false;
+  grouped.at=skipped.map(row=>row.at).filter(Boolean).sort().at(-1) || null;
   return rows.flatMap(row => row.status !== 'SKIP' ? [row] : added ? [] : (added = true, [grouped]));
 }
 function safeHtml(value) { return String(value || '').replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<style[\s\S]*?<\/style>/gi, '').replace(/on\w+\s*=\s*(['"]).*?\1/gi, ''); }
@@ -37,7 +38,7 @@ async function main(options = {}) {
   const relative = file => file ? path.relative(dir, file).split(path.sep).join('/') : '';
   const timing = read(path.join(dir, 'execution-timing.json'), null);
   const consoleEvents = read(path.join(dir, 'console-events.json'), progress.console || []);
-  const rows = groupSkippedRows(interactions.map(x => ({ status: x.result && x.result.status || 'INFO', component: x.control && (x.control.label || x.control.id) || 'Unknown component', detail: x.result && x.result.detail || '', url: x.pageUrl || '', screenshot: relative(x.screenshot) })).concat((progress.results || []).filter(x => !x.extra || !x.extra.screenshot).map(x => ({ status: x.status, component: x.name, detail: x.detail, url: x.extra?.url || '', screenshot: '' }))));
+  const rows = groupSkippedRows(require('./report-evidence.cjs').evidenceRows(interactions,progress.results || [],consoleEvents,relative));
   let modelHtml;
   if (options.offline || process.argv.includes('--offline')) {
     modelHtml = '<p>Generated from saved audit evidence. No new model analysis was requested. Review flagged outcomes and screenshots below.</p>';
@@ -52,7 +53,7 @@ async function main(options = {}) {
   metadata.lastEvent = (progress.results || []).filter(x => x.at).at(-1)?.at;
   metadata.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   metadata.errors = [
-    ...(progress.results || []).filter(x => ['FAIL','WARN'].includes(x.status)).map(x => ({at:x.at, status:x.status, source:x.name, message:x.detail || x.extra?.error || '', url:x.extra?.url || (x.extra?.screenshot ? interactions.find(i => i.screenshot === x.extra.screenshot)?.pageUrl : '') || ''})),
+    ...(progress.results || []).filter(x => !x.extra?.consoleEvent && ['FAIL','WARN'].includes(x.status)).map(x => ({at:x.at, status:x.status, source:x.name, message:x.detail || x.extra?.error || '', url:x.extra?.url || (x.extra?.screenshot ? interactions.find(i => i.screenshot === x.extra.screenshot)?.pageUrl : '') || ''})),
     ...consoleEvents.filter(x => ['error','pageerror','warning','warn'].includes(x.level)).map(x => ({at:x.at, status:['error','pageerror'].includes(x.level)?'FAIL':'WARN', source:'Browser '+x.level, message:x.text || x.message || '', url:x.url || ''}))
   ].sort((a,b) => String(a.at || '').localeCompare(String(b.at || '')));
   const json = value => JSON.stringify(value).replace(/</g, '\\u003c');

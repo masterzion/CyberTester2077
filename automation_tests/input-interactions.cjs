@@ -5,6 +5,7 @@ const {selectImages} = require('./upload-images.cjs');
 const forbidden = /\b(language|locale|translate|translation|logout|log out|sign out|signoff|switch account|delete|remove|destroy|purchase|buy|pay|subscribe|unsubscribe|reset password|revoke|dev tools)\b/i;
 const submitWords = /\b(save|send|post|publish|share|submit|create|add|apply|confirm)\b/i;
 function exclusion(c) {
+  if (c.developerControl || /open issues overlay|copy error info|component stack|open.*editor|ignore-listed frame|hide errors|close error overlay/i.test(c.label || c.ariaLabel || '')) return 'developer error overlay control';
   if (c.tag === 'select' && /child|family|recipient|account|supervised feed/i.test([c.label,c.ariaLabel,c.name,...(c.options || []).map(o=>o.text)].join(' '))) return 'keep current account, family and recipient scope';
   if (c.languageControl || forbidden.test([c.label,c.ariaLabel,c.name,c.href].join(' '))) return 'protected language/session/destructive control';
   if (['password','hidden'].includes(c.type)) return 'protected input';
@@ -32,9 +33,9 @@ async function discoverControls(page) {
   return page.locator('a,button,input,textarea,select,[role=button],[role=link],[role=checkbox],[role=radio],[contenteditable=true]').evaluateAll(nodes => nodes.map((node,index) => {
     const get = key => node.getAttribute(key) || '';
     const box = node.getBoundingClientRect();
-    node.setAttribute('data-child-audit-id',String(index));
     const languageRegion = node.closest('[role=menu],[role=listbox]');
-    return {id:'control-'+index,selector:'[data-child-audit-id="'+index+'"]',tag:node.tagName.toLowerCase(),type:get('type'),
+    return {id:'control-'+index,selector:'a,button,input,textarea,select,[role=button],[role=link],[role=checkbox],[role=radio],[contenteditable=true] >> nth='+index,tag:node.tagName.toLowerCase(),type:get('type'),
+      developerControl:!!node.closest('nextjs-portal,[data-nextjs-dialog],[data-nextjs-toast]') || node.getRootNode().host?.tagName==='NEXTJS-PORTAL',
       label:(get('aria-label') || node.labels?.[0]?.innerText || get('placeholder') || node.innerText || '').trim().replace(/\s+/g,' ').slice(0,220),
       ariaLabel:get('aria-label'),name:get('name'),href:get('href'),editable:node.isContentEditable,role:get('role'),
       languageControl:!!languageRegion && /language|locale/i.test(languageRegion.getAttribute('aria-label') || ''),
@@ -64,9 +65,7 @@ async function probeEmptySubmission(page, c, timeout) {
     const text=inputs.filter(n=>n.matches('textarea,[contenteditable=true],input:not([type=checkbox]):not([type=radio]):not([type=file]):not([type=range]):not([type=color])'));
     if(!text.length || text.some(n=>(n.isContentEditable?n.textContent:n.value).trim())) return null;
     if(inputs.some(n=>n.type==='file' && n.files.length)) return null;
-    const scopeId=button.getAttribute('data-child-audit-id');
-    scope.setAttribute('data-audit-empty-scope',scopeId);
-    return {nativeValidation:!!button.form && !button.form.noValidate && !button.formNoValidate,scopeSelector:'[data-audit-empty-scope="'+scopeId+'"]',required:inputs.filter(n=>n.required || n.getAttribute('aria-required')==='true').map(n=>n.getAttribute('aria-label') || n.name || n.getAttribute('placeholder') || n.tagName),
+    return {nativeValidation:!!button.form && !button.form.noValidate && !button.formNoValidate,validationErrors:inputs.filter(n=>n.validity && !n.validity.valid).map(n=>({field:n.name || n.getAttribute('placeholder') || n.tagName,message:n.validationMessage})),required:inputs.filter(n=>n.required || n.getAttribute('aria-required')==='true').map(n=>n.getAttribute('aria-label') || n.name || n.getAttribute('placeholder') || n.tagName),
       invalid:inputs.filter(n=>n.validity && !n.validity.valid).length};
   });
   if(!state) return null;
@@ -75,7 +74,7 @@ async function probeEmptySubmission(page, c, timeout) {
   await el.scrollIntoViewIfNeeded({timeout});
   const before=await page.locator('body').innerText();
   await el.click({timeout});
-  const browserErrors=await page.locator(state.scopeSelector).locator(':invalid').evaluateAll(nodes=>nodes.map(n=>({field:n.name || n.getAttribute('placeholder') || n.tagName,message:n.validationMessage})).filter(n=>n.message));
+  const browserErrors=state.validationErrors;
   if(state.nativeValidation && browserErrors.length) return {status:'PASS',detail:'Empty-input check: browser blocked submission with validation: '+JSON.stringify(browserErrors),scenario:'empty',requiredFields:state.required};
   try {
     await page.waitForFunction(previous=>Array.from(document.querySelectorAll('[role=alert],[role=status],[aria-invalid=true],[data-sonner-toast]')).some(n=>n.getClientRects().length && (n.getAttribute('aria-invalid')==='true' || (n.textContent.trim() && !previous.includes(n.textContent.trim())))),before,{timeout});

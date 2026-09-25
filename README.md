@@ -21,9 +21,58 @@ bash scripts/install-dependencies.sh
 
 Use `-SkipBrowser` (PowerShell) or `--skip-browser` (Bash) for documentation-only setup.
 
+## Main scripts
+
+There are two main scripts. The first reconciles documentation with source code;
+the second runs exploratory browser audits across every configured account.
+
+### `run-categorize-docs`
+
+Reads Markdown from `documentation.source_folder`, classifies each source into the
+configured destination files (stage 1), deduplicates those destinations (stage 2),
+and optionally reviews them against read-only code (stage 3). It writes nothing by
+default; add `-Apply`/`--apply` to persist changes. After each completed stage in
+apply mode the destination folder is snapshotted to `docs-stageN.tgz`.
+
+Parameters:
+
+| Parameter | Alias | Description |
+| --- | --- | --- |
+| `-Preview` | (bash/node default) | Run without writing and create no archives. |
+| `-Apply` | `--apply` | Write changes to the destination folder. PowerShell defaults to this; bash/node require the flag. Cannot combine with `-Preview`. |
+| `-Settings <path>` | `AUTOMATION_SETTINGS` env | Settings file to load (defaults to `automation_tests/automation-settings.yml`, falling back to the `.example`). |
+| `-SourceFile "relative.md"` | `--source-file` | Process a single source file relative to `documentation.source_folder`. Cannot combine with `--stage2-only` or `--stage3-only`. |
+| `-Stage3Only` | `--stage3-only` | Run only code review against existing destinations. Requires `code.code_review: true`; cannot combine with `-SourceFile`. |
+| `-Stage2Only` | `--stage2-only` | Run only deduplication against existing configured destinations. Cannot combine with `-SourceFile` or `-Stage3Only`. |
+
+Environment overrides for a process: `MODEL_STAGE1`, `MODEL_STAGE2`, `MODEL_STAGE3`,
+`MODEL_NAME`, and `MODEL_URL`. Per-request timeouts come from `llm.timeout_seconds`
+and `llm.timeout_stage2_seconds` in the settings file.
+
+### `run-account-matrix`
+
+Loads accounts from `credentials.yml`, runs a web audit, a mobile audit per configured
+profile (or both), collects screenshots/HTML/console evidence, and writes an
+interactive report plus `account-matrix.json`. Missing passwords are skipped; any
+failure or skip sets a non-zero exit code.
+
+Parameters:
+
+| Parameter | Description |
+| --- | --- |
+| `--web` | Run web audits for every account with `runtest_web: true`. |
+| `--mobile` | Run mobile audits (one per profile) for accounts with `runtest_mobile: true`, when `mobile.enabled` is true. |
+
+Omit both flags to run web and mobile together. The runner loads the repository-root
+`.env`; process variables take precedence. `AUTOMATION_SETTINGS` selects another
+settings file. Each account receives one web run and one mobile run per configured
+profile; `adb_serial`, `application_id`, and `density` do not affect these browser runs.
+
 ## Configuration
 
-Edit the stage prompts directly in `automation_tests/automation-settings.yml`:
+Full parameter reference for both configuration files is in [howto.md](howto.md).
+The only settings edited directly here are the stage prompts, stored under
+`prompts` in `automation_tests/automation-settings.yml`:
 
 ```yaml
 prompts:
@@ -42,53 +91,6 @@ results are attached automatically by the host script; the YAML prompt should no
 contain placeholders for them. If a stage key is omitted, the script uses its
 versioned default in `stage-prompts.yml`. Blank prompts are rejected. Restart a
 running script to load edits.
-
-The categorizer supports separate models for each stage under `llm`:
-
-All three categorization stages send `reasoning: "off"` to the LM Studio
-`/api/v1/chat` endpoint. Models that do not support this setting may reject the
-request; the script reports the error rather than silently enabling thinking.
-
-```yaml
-llm:
-  endpoint: "http://192.168.2.110:1234/api/v1/chat"
-  api_key_env: "LLM_API_KEY"
-  model_stage1: "google/gemma-3-4b" # Classification
-  model_stage2: "google/gemma-3-4b" # Deduplication
-  model_stage3: "google/gemma-3-4b" # Code review
-  model: "google/gemma-3-4b" # Optional categorization fallback
-  playwright_model: "gemma-4-e4b-it" # Browser audits and HTML reporter
-```
-
-Set each stage field to the model identifier served by your endpoint. Resolution is
-`MODEL_STAGE1/2/3` environment override, then the corresponding YAML stage field,
-then `MODEL_NAME`, then `llm.model`. The shared endpoint and API key apply to all
-stages. Request logs and the report show the effective stage models. The fallback
-`llm.model` is optional for categorization when every `model_stage*` value is set,
-but the Playwright audit scripts and HTML reporter use `MODEL_NAME` or
-`llm.playwright_model`; configure the latter when running browser audits.
-
-Edit `automation_tests/automation-settings.yml`. It contains:
-
-- `web`: app URL, headless mode, page/action limits, action timeout.
-- `llm`: endpoint, model name, and the environment-variable name containing the API key.
-- `documentation`: source folder, destination folder, and destination file definitions.
-- `mobile`: responsive screen profiles and an enabled flag.
-- `upload_images`: local test-image folder and random image count per upload.
-
-`AUTOMATION_SETTINGS` can select another settings file. `MODEL_STAGE1`,
-`MODEL_STAGE2`, `MODEL_STAGE3`, `MODEL_NAME`, and `MODEL_URL` override YAML for a
-process. The root PowerShell categorization command also accepts
-`-Settings "path/to/settings.yml"`.
-Paths in documentation settings resolve relative to the repository root.
-
-Keep documentation settings in the settings file. For compatibility, the categorizer
-merges a `documentation` block from local credentials over the settings block;
-avoid maintaining two conflicting copies. The browser audit reads its documentation
-folder from the settings file.
-
-The configured source folder is read-only. Destination output must be outside it.
-Setting `destination_read_write: false` blocks categorizer apply mode.
 
 ## Categorize documentation
 
@@ -119,12 +121,9 @@ Run only deduplication against existing configured destination documents:
 `./run-categorize-docs.ps1 -Stage2Only`. Add `-Preview` for no writes.
 Node and Bash accept `--stage2-only` (plus `--apply` to save).
 This skips stages 1 and 3 and cannot be combined with `-SourceFile` or `-Stage3Only`.
-Configure the per-request timeout under `llm` in `automation-settings.yml`:
-`timeout_seconds: 3600` allows one hour for each model request.
-Optional `timeout_stage2_seconds` overrides that value for stage 2.
-Without configuration, stage 2 defaults to 1800 seconds and other stages to 300.
-Each file is read, deduplicated independently, and saved back to the same path
-before the next file is processed. Missing destination files are skipped.
+Per-request timeouts are configured under `llm` in `automation-settings.yml`; see
+[howto.md](howto.md). Each file is read, deduplicated independently, and saved back
+to the same path before the next file is processed. Missing destination files are skipped.
 
 After each completed stage in apply mode, the entire destination folder is
 compressed into `docs-stage1.tgz`, `docs-stage2.tgz`, or `docs-stage3.tgz`
@@ -217,10 +216,10 @@ The current ten destinations are:
 | model.md | Local-model configuration, reproducible benchmarks, prompt templates and measured prompt optimizations |
 | database.md | Database architecture, schemas, relationships, migrations, queries, performance and maintenance |
 
-Change `documentation.destination_files` to change this list. Each item uses
-`id`, `file`, and `content`. Apply mode creates missing configured files only
-when source-backed additions are returned. It does not require pre-created files.
-Preview never creates destination files.
+Change `documentation.destination_files` to change this list; each item uses
+`id`, `file`, and `content`. See [howto.md](howto.md) for the full schema. Apply
+mode creates missing configured files only when source-backed additions are returned,
+and never requires pre-created files. Preview never creates destination files.
 
 Deduplication now relies on the model to preserve unique information rather than
 verifying exact block equality. Review the resulting Markdown against the original;
@@ -235,11 +234,9 @@ Create the local ignored credentials file if it does not exist:
 Copy-Item automation_tests/credentials.yml.example automation_tests/credentials.yml
 ```
 
-Each account contains `name`, `role`, `description`, `email`, `runtest_web`, and
-`runtest_mobile`. Supply either `password_env` or a `password` in the ignored local
-credentials file. When `password_env` is present, its environment value takes
-precedence. Add named secret variables to the repository-root `.env` or your
-process environment. For example:
+Every account field is documented in [howto.md](howto.md). Supply either a `password`
+or a `password_env` (whose environment value takes precedence) for each account. Add
+named secret variables to the repository-root `.env` or your process environment:
 
 ```dotenv
 KIDVERSE_ELZA_PASSWORD=your-test-account-password
@@ -250,12 +247,6 @@ The account runner loads `.env`; existing process variables take precedence.
 Standalone categorization and report commands currently read API keys from the
 process environment, so export the variable named by `llm.api_key_env` for those
 commands. Keep secrets out of tracked YAML and logs.
-
-Set `login_timeout_seconds` per account (default: 20). For example, use 120 for an
-account whose first access requires compilation. This is a maximum wait, not a
-fixed delay, and also sets that account's interaction timeout. Page readiness
-waits for the load event and a visible body, not network inactivity; individual
-actions still wait for actionable controls.
 
 Run the selected accounts:
 
@@ -307,23 +298,16 @@ completion. Review the report before treating posts or messages as delivered.
 
 ### Random image uploads
 
-Add this block to the ignored `automation_tests/automation-settings.yml`:
-
-```yaml
-upload_images:
-  folder: "automation_tests/uploadimagetest"
-  count: 3
-```
-
-Relative paths resolve from the repository root; absolute paths are also accepted.
-Put approved test images in this folder. It is ignored by Git. For each file input,
-the runner randomly selects distinct images compatible with its `accept` attribute.
-Multi-file inputs receive three images together by default. Single-file inputs
-receive one and report the limitation; fewer available compatible images also
-produce a warning. Selection does not recurse into subfolders or follow symlinks.
-Supported extensions are JPG/JPEG, PNG, GIF, WebP, AVIF, BMP, and SVG. Attachment
-does not itself confirm server upload or publication. Selected filenames appear
-in the interaction evidence. Restart the runner after changing configuration.
+Enable this by adding an `upload_images` block to the ignored
+`automation_tests/automation-settings.yml`; see [howto.md](howto.md) for every field.
+Put approved test images in the configured folder, which is ignored by Git. For each
+file input the runner randomly selects distinct images compatible with its
+`accept` attribute. Multi-file inputs receive three images together by default;
+single-file inputs receive one and report the limitation, as do runs with fewer
+compatible images available. Selection does not recurse into subfolders or follow
+symlinks. Supported extensions are JPG/JPEG, PNG, GIF, WebP, AVIF, BMP, and SVG.
+Attachment does not itself confirm server upload or publication. Selected filenames
+appear in the interaction evidence. Restart the runner after changing configuration.
 
 ## Results and checks
 

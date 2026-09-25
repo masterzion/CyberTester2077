@@ -30,6 +30,22 @@ const nativeFetch = global.fetch;
 global.fetch = (url, options = {}) => nativeFetch(url, { ...options, headers: { ...options.headers, ...(process.env[cfg.apiKeyEnv] ? { authorization: 'Bearer ' + process.env[cfg.apiKeyEnv] } : {}) } });
 const audit = { results: [], controls: [], pages: [], interactions: [], model: [], console: [] };
 const visited = new Set();
+function recordBrowserEvent(level,text,url) {
+  const at=new Date().toISOString();
+  audit.console.push({level,text,url,at});
+  if(['error','pageerror'].includes(level)) audit.results.push({name:'Browser '+level,status:'FAIL',detail:text,at,extra:{url,consoleEvent:true}});
+}
+async function handleErrorOverlay(page) {
+  const {inspectErrorOverlay,dismissErrorOverlay}=require('./error-overlay.cjs');
+  const error=await inspectErrorOverlay(page);
+  if(!error) return true;
+  const evidence=await screenshot(page,'error-overlay');
+  const closed=await dismissErrorOverlay(page);
+  const result={status:'FAIL',detail:error.text+'\nOverlay '+(closed?'dismissed before continuing.':'could not be dismissed; stopping interactions on this page.')};
+  audit.interactions.push({at:error.at,pageUrl:error.url,control:{label:'Application error overlay'},result,screenshot:evidence});
+  note('Application error overlay','FAIL',result.detail,{url:error.url,screenshot:evidence});
+  return closed;
+}
 const unsafe = /\b(delete|remove|destroy|logout|log out|sign out|purchase|buy|pay|subscribe|unsubscribe|reset password|revoke)\b/i;
 function save(name, value) { const file = path.join(RUN_DIR, name); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, typeof value === 'string' ? value : JSON.stringify(value, null, 2)); return file; }
 const executionStartedAt = new Date().toISOString();
@@ -136,6 +152,7 @@ function executionCandidates(controls, attempted) {
 }
 async function inspect(page, origin) {
   await waitForPageReady(page);
+  if(!await handleErrorOverlay(page)) return [];
   const url = page.url();
   if (visited.has(url) || !sameOrigin(url, origin) || audit.pages.length >= cfg.maxPages) return [];
   visited.add(url);
@@ -158,6 +175,7 @@ async function inspect(page, origin) {
   const links=new Set();
   let current=await discover(page), actions=0, scrollPasses=0;
   while(actions < cfg.maxActions) {
+    if(!await handleErrorOverlay(page)) break;
     if(page.url()!==url) {if(sameOrigin(page.url(),origin)) links.add(page.url());break;}
     for(const control of current) {
       if(!control.visible) hidden.add(controlKey(control));
@@ -170,7 +188,7 @@ async function inspect(page, origin) {
       if(result) {
         actions++;
         const after=await screenshot(page,'empty-'+emptyTarget.id);
-        audit.interactions.push({pageUrl:url,control:emptyTarget,scenario:'empty',result,screenshot:after});
+        audit.interactions.push({at:new Date().toISOString(),pageUrl:url,control:emptyTarget,scenario:'empty',result,screenshot:after});
         note('Empty submission '+emptyTarget.id,result.status,result.detail,{url,label:emptyTarget.label,screenshot:after});
       }
       current=await discover(page);
@@ -201,17 +219,18 @@ async function inspect(page, origin) {
     const action=guided.get(key);
     const result=await interact(page,control,action).catch(error=>({status:'FAIL',detail:error.message}));
     const after=await screenshot(page,'interaction-'+control.id);
-    audit.interactions.push({pageUrl:url,control,modelAction:action||null,result,screenshot:after});
+    audit.interactions.push({at:new Date().toISOString(),pageUrl:url,control,modelAction:action||null,result,screenshot:after});
     note('Interact '+control.id,result.status,result.detail,{label:control.label,screenshot:after,modelAction:action||null});
     if(page.url()!==url) {if(sameOrigin(page.url(),origin)) links.add(page.url());break;}
     // Menus, dialogs and reactive UI can reveal controls without changing the URL.
+    if(!await handleErrorOverlay(page)) break;
     current=await discover(page);
   }
   Object.assign(coverage,{hidden:hidden.size,disabled:disabled.size,revealed:revealed.size});
   note('Control coverage','INFO',hidden.size+' hidden and '+disabled.size+' disabled controls excluded from execution; '+revealed.size+' newly available controls discovered.',{url,hidden:hidden.size,disabled:disabled.size,revealed:revealed.size});
   return [...links];
 }
-async function main() { fs.mkdirSync(RUN_DIR, { recursive: true }); const browser = await chromium.launch({ headless: cfg.headless }); const context = await browser.newContext(); const page = await context.newPage(); page.setDefaultTimeout(cfg.actionTimeoutMs); page.setDefaultNavigationTimeout(cfg.actionTimeoutMs); page.on('console', message => audit.console.push({ url: page.url(), level: message.type(), text: message.text(), at: new Date().toISOString() })); page.on('pageerror', error => audit.console.push({ url: page.url(), level: 'pageerror', text: error.message, at: new Date().toISOString() })); try { try { await login(page); note('Login as child', 'PASS'); } catch (error) { note('Login as child', 'FAIL', error.message); } const origin = new URL(page.url()).origin; const queue = [page.url()]; while (queue.length && audit.pages.length < cfg.maxPages) { const next = queue.shift(); if (visited.has(next)) continue; await page.goto(next, { waitUntil: 'domcontentloaded' }).catch(error => note('Navigation', 'FAIL', error.message, { url: next })); for (const target of await inspect(page, origin)) if (!visited.has(target)) queue.push(target); } } finally { await context.close(); await browser.close(); const files = { inventory: save('interaction-inventory.json', audit.controls), interactions: save('interaction-results.json', audit.interactions), pages: save('visited-pages.json', audit.pages), console: save('console-events.json', audit.console), model: save('model-observations.json', audit.model) }; const summary = { pages: audit.pages.length, controls: audit.controls.length, interactions: audit.interactions.length, passed: audit.results.filter(item => item.status === 'PASS').length, failed: audit.results.filter(item => item.status === 'FAIL').length, skipped: audit.results.filter(item => item.status === 'SKIP').length }; const stamp = new Date().toISOString().replace(/[:.]/g, '-'); const report = { config: { appUrl: cfg.appUrl, modelUrl: cfg.modelUrl, model: cfg.model, password: '[redacted]' }, summary, files, results: audit.results }; files.report = save('child-audit-' + stamp + '.json', report); save('child-audit-' + stamp + '.md', '# LLM-guided child UI audit\n\n- Model: ' + cfg.model + '\n- Pages: ' + summary.pages + '\n- Controls: ' + summary.controls + '\n- Interactions: ' + summary.interactions + '\n- Passed: ' + summary.passed + '\n- Failed: ' + summary.failed + '\n- Skipped: ' + summary.skipped + '\n\n' + Object.entries(files).map(item => '- ' + item[0] + ': ' + item[1]).join('\n')); } }
+async function main() { fs.mkdirSync(RUN_DIR, { recursive: true }); const browser = await chromium.launch({ headless: cfg.headless }); const context = await browser.newContext(); const page = await context.newPage(); page.setDefaultTimeout(cfg.actionTimeoutMs); page.setDefaultNavigationTimeout(cfg.actionTimeoutMs); page.on('console', message => recordBrowserEvent(message.type(),message.text(),page.url())); page.on('pageerror', error => recordBrowserEvent('pageerror',error.message,page.url())); try { try { await login(page); note('Login as child', 'PASS'); } catch (error) { note('Login as child', 'FAIL', error.message); } const origin = new URL(page.url()).origin; const queue = [page.url()]; while (queue.length && audit.pages.length < cfg.maxPages) { const next = queue.shift(); if (visited.has(next)) continue; await page.goto(next, { waitUntil: 'domcontentloaded' }).catch(error => note('Navigation', 'FAIL', error.message, { url: next })); for (const target of await inspect(page, origin)) if (!visited.has(target)) queue.push(target); } } finally { await context.close(); await browser.close(); const files = { inventory: save('interaction-inventory.json', audit.controls), interactions: save('interaction-results.json', audit.interactions), pages: save('visited-pages.json', audit.pages), console: save('console-events.json', audit.console), model: save('model-observations.json', audit.model) }; const summary = { pages: audit.pages.length, controls: audit.controls.length, interactions: audit.interactions.length, passed: audit.results.filter(item => item.status === 'PASS').length, failed: audit.results.filter(item => item.status === 'FAIL').length, skipped: audit.results.filter(item => item.status === 'SKIP').length }; const stamp = new Date().toISOString().replace(/[:.]/g, '-'); const report = { config: { appUrl: cfg.appUrl, modelUrl: cfg.modelUrl, model: cfg.model, password: '[redacted]' }, summary, files, results: audit.results }; files.report = save('child-audit-' + stamp + '.json', report); save('child-audit-' + stamp + '.md', '# LLM-guided child UI audit\n\n- Model: ' + cfg.model + '\n- Pages: ' + summary.pages + '\n- Controls: ' + summary.controls + '\n- Interactions: ' + summary.interactions + '\n- Passed: ' + summary.passed + '\n- Failed: ' + summary.failed + '\n- Skipped: ' + summary.skipped + '\n\n' + Object.entries(files).map(item => '- ' + item[0] + ': ' + item[1]).join('\n')); } }
 if (require.main === module) {
   publishProgress();
   console.log('[LIVE REPORT] '+path.join(RUN_DIR, 'interactive-report.html'));
