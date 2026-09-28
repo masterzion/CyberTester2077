@@ -13,6 +13,7 @@ test('overview comes first and design narrative lives inside the two design sect
   await page.setContent(template.replace(/{{([A-Z_]+)}}/g,(_,key)=>values[key]||''));
   assert.deepEqual(await page.locator('main > section').evaluateAll(nodes=>nodes.slice(0,4).map(n=>n.id)),['overview','evidence','broken-design','design-improvement']);
   assert.equal(await page.locator('#overview #narrative').count(),0);
+  assert.equal(await page.locator('#errors,#issues,#errorlist,#findings').count(),0);
   assert.equal(await page.locator('#broken-design .design-summary').innerText(),'Layout defects summary');
   assert.match(await page.locator('#broken-design').innerText(),/Wrap text/);
   assert.equal(await page.locator('#design-improvement .design-summary').innerText(),'Optional refinements summary');

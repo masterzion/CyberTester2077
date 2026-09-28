@@ -9,6 +9,15 @@ function evidenceRows(interactions,results,consoleEvents,relative) {
   });
   const events=results.filter(x=>!x.extra?.screenshot && !x.extra?.consoleEvent).map(x=>({at:x.at,status:x.status,component:x.name,detail:x.detail,url:x.extra?.url || '',screenshot:''}));
   const errors=consoleEvents.filter(x=>['error','pageerror','warning','warn'].includes(x.level)).map(x=>({at:x.at,status:['error','pageerror'].includes(x.level)?'FAIL':'WARN',component:'Browser '+x.level,detail:x.text || x.message || '',url:x.url || '',screenshot:''}));
-  return [...steps,...events,...errors];
+  // Only remove identical copies of the same event. A repeated failure at a
+  // different time, URL, or screenshot is still distinct evidence.
+  const seen=new Set();
+  return [...steps.map(row=>({...row,category:'interactions'})),
+    ...events.map(row=>({...row,category:'execution'})),
+    ...errors.map(row=>({...row,category:'browser'}))].filter(row=>{
+    const key=JSON.stringify([row.category,row.at,row.status,row.component,row.detail,row.url,row.screenshot]);
+    if(seen.has(key)) return false;
+    seen.add(key);return true;
+  });
 }
 module.exports={evidenceRows};

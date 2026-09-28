@@ -339,6 +339,12 @@ of per-database transactions. No service is stopped automatically.
 
 ### Audit output
 
+![Interactive audit report showing execution overview, categorized interaction evidence, and separate design findings](assets/interactive-report.png)
+
+The report separates interactions, browser/API errors, and execution notes using
+the category filter. Broken design and Design improvement have dedicated sections;
+raw model logs are collapsed. The screenshot is an example, not a completed design assessment.
+
 ```text
 automation_tests/output/[local-timestamp]/[role]/[sanitized-account-name]/web/
 automation_tests/output/[local-timestamp]/[role]/[sanitized-account-name]/mobile-[profile]/
