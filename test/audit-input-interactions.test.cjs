@@ -3,6 +3,39 @@ const assert=require('node:assert/strict');
 const {chromium}=require('playwright');
 const {exclusion,inputValue,priority,discoverControls,performInteraction,probeEmptySubmission}=require('../automation_tests/input-interactions.cjs');
 
+test('guardian policy audit only increases daily allowance and preserves other settings',async()=>{
+  const browser=await chromium.launch({headless:true});
+  try {
+    const page=await browser.newPage();
+    await page.route('http://policy.test/**',route=>route.fulfill({contentType:'text/html',body:`
+      <input type="number" min="0" aria-label="Daily Limit (minutes)" value="600">
+      <input type="time" aria-label="Bedtime Start" value="00:00">
+      <input type="time" aria-label="Bedtime End" value="00:01">
+      <input type="checkbox" aria-label="Block during school" checked>
+      <button type="submit">Save</button>`}));
+    await page.goto('http://policy.test/en/parent/policies?childId=test');
+    const controls=await discoverControls(page);
+    const daily=controls.find(c=>c.dailyAllowance);
+    assert.ok(daily);
+    for(const value of [undefined,'0','120','600','invalid','1441','601.5','']) {
+      assert.equal((await performInteraction(page,daily,{value},500,'QA')).status,'SKIP');
+      assert.equal(await page.locator('input[type=number]').inputValue(),'600');
+    }
+    assert.equal((await performInteraction(page,daily,{value:'1440'},500,'QA')).status,'PASS');
+    // Even an old inventory cannot reduce the live value.
+    assert.equal((await performInteraction(page,daily,{value:'999'},500,'QA')).status,'SKIP');
+    assert.equal(await page.locator('input[type=number]').inputValue(),'1440');
+    for(const control of controls.filter(c=>['time','checkbox'].includes(c.type))) {
+      assert.equal((await performInteraction(page,control,{value:'12:00',checked:false},500,'QA')).status,'SKIP');
+    }
+    assert.deepEqual(await page.locator('input[type=time]').evaluateAll(nodes=>nodes.map(n=>n.value)),['00:00','00:01']);
+    assert.equal(await page.locator('input[type=checkbox]').isChecked(),true);
+    assert.equal(await probeEmptySubmission(page,controls.find(c=>c.type==='submit'),500),null);
+    await page.locator('input[type=number]').evaluate(n=>n.setAttribute('aria-label','Dienas limits (minūtēs)'));
+    assert.ok((await discoverControls(page)).find(c=>c.dailyAllowance));
+  } finally {await browser.close();}
+});
+
 test('language controls and scope changes are blocked; inputs precede submission',()=>{
   assert.ok(exclusion({tag:'button',label:'Language: English'}));
   assert.ok(exclusion({tag:'select',label:'Feed',options:[{text:'My posts'},{text:'Child supervised feed'}]}));
@@ -21,7 +54,7 @@ test('browser fixtures: close overlay, fill, upload, send, verify, and respect o
       <textarea placeholder="Message" required></textarea>
       <input type="file" accept="image/*" hidden>
       <button type="submit">Send</button>
-      </form><div role="status"></div><div role="menu" style="position:fixed;inset:0;background:white">Open menu</div>
+      <div role="status"></div></form><div role="menu" style="position:fixed;inset:0;background:white">Open menu</div>
       <script>document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelector('[role=menu]').remove()})</script>`);
     let controls=await discoverControls(page);
     assert.equal((await performInteraction(page,controls[0],null,1500,'QA TEST')).status,'SKIP');
@@ -72,7 +105,7 @@ test('empty and populated scenarios validate required fields without deleting dr
   try {
     const page=await browser.newPage();
     await page.setContent(`<form onsubmit="event.preventDefault();document.querySelector('[role=status]').textContent='Post saved successfully'">
-      <textarea required placeholder="Post"></textarea><button type="submit">Post</button></form><div role="status"></div>`);
+      <textarea required placeholder="Post"></textarea><button type="submit">Post</button><div role="status"></div></form>`);
     let controls=await discoverControls(page);
     let button=controls.find(c=>c.type==='submit');
     const empty=await probeEmptySubmission(page,button,500);

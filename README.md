@@ -311,6 +311,34 @@ appear in the interaction evidence. Restart the runner after changing configurat
 
 ## Results and checks
 
+### Reset the development demo
+
+`scripts/reset-development-demo.cjs` can be reused to replace demo content while
+preserving accounts, relationships, permissions and configuration. Configure
+`demo_reset` in `automation_tests/automation-settings.yml` using
+`automation_tests/demo-reset.example.yml` as a reference. Set the application root,
+credentials file, local PostgreSQL port, container engine and container name.
+Database names and users come from the application's existing DEV configuration.
+This supports the existing application schema, not arbitrary database schemas.
+
+```powershell
+# Read-only inventory and validation; safe while the app is running:
+node scripts/reset-development-demo.cjs
+# After reviewing the plan and stopping the DEV application services:
+node scripts/reset-development-demo.cjs --apply --confirm-development-reset
+```
+
+Use `--settings path/to/settings.yml` for another environment, or `--app-root`
+and `--credentials` for path overrides. Remote databases are forbidden. Each apply
+creates validated database dumps under `automation_tests/output/demo-backups/`,
+resets matching account passwords from the current credentials file, and replaces
+content with initial posts, learning activities and goals. Unlisted accounts keep
+their passwords. Repeat runs do not accumulate seeded content. Restart DEV services
+afterward. See `AGENTS.md` for preserved data, backup recovery and the limitations
+of per-database transactions. No service is stopped automatically.
+
+### Audit output
+
 ```text
 automation_tests/output/[local-timestamp]/[role]/[sanitized-account-name]/web/
 automation_tests/output/[local-timestamp]/[role]/[sanitized-account-name]/mobile-[profile]/

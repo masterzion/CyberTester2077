@@ -31,6 +31,7 @@ global.fetch = (url, options = {}) => nativeFetch(url, { ...options, headers: { 
 const audit = { results: [], controls: [], pages: [], interactions: [], model: [], console: [] };
 const visited = new Set();
 function recordBrowserEvent(level,text,url) {
+  if (level==='error' && /^Failed to load resource: the server responded with a status of \d+/.test(text)) return; // recorded with the actual endpoint by the response listener
   const at=new Date().toISOString();
   audit.console.push({level,text,url,at});
   if(['error','pageerror'].includes(level)) audit.results.push({name:'Browser '+level,status:'FAIL',detail:text,at,extra:{url,consoleEvent:true}});
@@ -119,9 +120,24 @@ function skip(control) {
 async function interact(page, control, guided) {
   const why = skip(control);
   if (why) return {status:'SKIP',detail:why};
-  return inputInteractions.performInteraction(page,control,guided,cfg.actionTimeoutMs,'QA TEST '+RUN_ID+' — automated test content',uploadSettings);
+  const {needsText,generateText}=require('./contextual-text.cjs');
+  if(needsText(control) && guided?.action !== 'observe') {
+    const context={account:{role:cfg.role,description:cfg.roleDescription},page:{url:page.url(),title:await page.title(),text:(await page.locator('body').innerText()).slice(0,7000)},field:control};
+    let content;
+    try {
+      content=await generateText(context,async payload=>{
+        const response=await fetch(cfg.modelUrl,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:cfg.model,...payload}),signal:AbortSignal.timeout(60000)});
+        if(!response.ok) throw new Error('model HTTP '+response.status);
+        return response.json();
+      });
+    } catch(error) {return {status:'WARN',detail:'Contextual input generation failed; field left unchanged: '+error.message};}
+    if(content.skip) return {status:'SKIP',detail:content.reason};
+    guided={...guided,action:'fill',value:content.value};
+  }
+  return inputInteractions.performInteraction(page,control,guided,cfg.actionTimeoutMs,'',uploadSettings);
 }
 async function login(page) {
+  require('./network-evidence.cjs').attachNetworkEvidence(page, recordBrowserEvent);
   const deadline = Date.now() + cfg.loginTimeoutMs;
   const remaining = () => { const ms=deadline-Date.now(); if(ms<=0) throw new Error('Login exceeded '+cfg.loginTimeoutMs/1000+' seconds'); return ms; };
   console.log('[LOGIN] '+cfg.accountName+' role='+cfg.role+' timeout='+cfg.loginTimeoutMs/1000+'s');

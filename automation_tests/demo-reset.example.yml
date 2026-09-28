@@ -1,0 +1,12 @@
+# Settings for the existing account-preserving application schema adapter.
+# Relative filesystem paths resolve from the CyberTester repository root.
+demo_reset:
+  full_time_accounts: [] # Exact child emails with all-day DEV demo access.
+  app_root: "../kidverse"
+  credentials: "automation_tests/credentials.yml"
+  host: "127.0.0.1" # Remote targets are deliberately forbidden.
+  port: 15432
+  container_engine: "podman" # podman or docker
+  postgres_container: "kidverse-dev-postgres"
+# Actual database names/users come from the application's existing DEV settings
+# and must agree with its existing bootstrap. No passwords belong in this file.

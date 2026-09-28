@@ -1,10 +1,13 @@
 'use strict';
 const path = require('node:path');
 const {selectImages} = require('./upload-images.cjs');
+const {protectedField} = require('./contextual-text.cjs');
 
 const forbidden = /\b(language|locale|translate|translation|logout|log out|sign out|signoff|switch account|delete|remove|destroy|purchase|buy|pay|subscribe|unsubscribe|reset password|revoke|dev tools)\b/i;
 const submitWords = /\b(save|send|post|publish|share|submit|create|add|apply|confirm)\b/i;
 function exclusion(c) {
+  if (c.policyPage && isInput(c) && !c.dailyAllowance) return 'preserve existing guardian policy settings';
+  if (protectedField(c)) return 'protected identity or password field';
   if (c.developerControl || /open issues overlay|copy error info|component stack|open.*editor|ignore-listed frame|hide errors|close error overlay/i.test(c.label || c.ariaLabel || '')) return 'developer error overlay control';
   if (c.tag === 'select' && /child|family|recipient|account|supervised feed/i.test([c.label,c.ariaLabel,c.name,...(c.options || []).map(o=>o.text)].join(' '))) return 'keep current account, family and recipient scope';
   if (c.languageControl || forbidden.test([c.label,c.ariaLabel,c.name,c.href].join(' '))) return 'protected language/session/destructive control';
@@ -34,10 +37,12 @@ async function discoverControls(page) {
     const get = key => node.getAttribute(key) || '';
     const box = node.getBoundingClientRect();
     const languageRegion = node.closest('[role=menu],[role=listbox]');
-    return {id:'control-'+index,selector:'a,button,input,textarea,select,[role=button],[role=link],[role=checkbox],[role=radio],[contenteditable=true] >> nth='+index,tag:node.tagName.toLowerCase(),type:get('type'),
+    const policyPage = /\/parent\/policies\/?$/.test(location.pathname);
+    const dailyAllowance = policyPage && node.type === 'number' && /daily.*limit|dienas.*limits/i.test([get('aria-label'),get('name'),node.labels?.[0]?.innerText].join(' '));
+    return {policyPage,dailyAllowance,id:'control-'+index,selector:'a,button,input,textarea,select,[role=button],[role=link],[role=checkbox],[role=radio],[contenteditable=true] >> nth='+index,tag:node.tagName.toLowerCase(),type:get('type'),
       developerControl:!!node.closest('nextjs-portal,[data-nextjs-dialog],[data-nextjs-toast]') || node.getRootNode().host?.tagName==='NEXTJS-PORTAL',
       label:(get('aria-label') || node.labels?.[0]?.innerText || get('placeholder') || node.innerText || '').trim().replace(/\s+/g,' ').slice(0,220),
-      ariaLabel:get('aria-label'),name:get('name'),href:get('href'),editable:node.isContentEditable,role:get('role'),
+      ariaLabel:get('aria-label'),name:get('name'),autocomplete:get('autocomplete'),href:get('href'),editable:node.isContentEditable,role:get('role'),
       languageControl:!!languageRegion && /language|locale/i.test(languageRegion.getAttribute('aria-label') || ''),
       visible:!!(box.width && box.height && getComputedStyle(node).visibility!=='hidden' && getComputedStyle(node).display!=='none'),
       disabled:!!node.disabled || get('aria-disabled')==='true',min:get('min'),max:get('max'),maxLength:node.maxLength,accept:get('accept'),
@@ -54,6 +59,7 @@ async function closeBlockingMenus(page, target) {
   await menus.first().waitFor({state:'hidden'});
 }
 async function probeEmptySubmission(page, c, timeout) {
+  if (c.policyPage) return null;
   const el=page.locator(c.selector).first();
   const state=await el.evaluate(button=>{
     let scope=button.form || button.parentElement;
@@ -89,6 +95,20 @@ async function performInteraction(page, c, guided, timeout, marker, uploadSettin
   if (blocked) return {status:'SKIP',detail:blocked};
   if (guided?.action === 'observe') return {status:'SKIP',detail:'model requested observation: '+(guided.reason || '')};
   const el = page.locator(c.selector).first();
+  if (c.dailyAllowance) {
+    // Read live values, not the earlier inventory: a model proposal must never lower access.
+    const current = await el.inputValue();
+    const proposed = guided?.value;
+    const limits = await el.evaluate(node => ({min:node.min,max:node.max}));
+    const next = typeof proposed === 'string' || typeof proposed === 'number' ? Number(proposed) : NaN;
+    if (!current.trim() || !Number.isSafeInteger(Number(current)) || Number(current) < 0 ||
+        !Number.isSafeInteger(next) || next <= Number(current) || next > 1440 ||
+        (limits.min !== '' && next < Number(limits.min)) || (limits.max !== '' && next > Number(limits.max))) {
+      return {status:'SKIP',detail:'Preserved daily allowance: only a valid explicit increase is allowed'};
+    }
+    await el.fill(String(next));
+    return {status:'PASS',detail:'Daily allowance increased; submission is a separate step'};
+  }
   await closeBlockingMenus(page,el);
   if (c.type !== 'file') await el.scrollIntoViewIfNeeded({timeout});
   if (c.type === 'file') {
@@ -116,19 +136,28 @@ async function performInteraction(page, c, guided, timeout, marker, uploadSettin
       return {status:'SKIP',detail:'native color picker is not supported by this executor'};
     } else await el.fill(value);
   } else if (isSubmit(c)) {
-    const before = await page.locator('body').innerText();
     const form = el.locator('xpath=ancestor::form[1]');
+    // Bind feedback to the submitted form, excluding independent upload widgets.
+    const scope = await form.count() ? form : page.locator('body');
+    const readFeedback = () => scope.evaluate(node => Array.from(node.querySelectorAll('[role=alert],[role=status],[data-sonner-toast]'))
+      .filter(n => n.getClientRects().length && !n.closest('[data-interaction-region="media-upload"],#profile-picture'))
+      .map(n => n.textContent.trim()).filter(Boolean));
+    const before = await readFeedback();
     const invalidBefore = await form.locator(':invalid').count().catch(()=>0);
     await el.click({timeout});
     const invalid = invalidBefore && await form.locator(':invalid').count().catch(()=>0);
     if (invalid) return {status:'WARN',detail:'Submission blocked by browser validation ('+invalid+' invalid field(s)); not saved/sent'};
-    // Only explicit new feedback counts as confirmation, not merely a successful click.
-    const feedback=page.locator('[role=alert],[role=status],[data-sonner-toast],[data-state=open][role=dialog]');
-    try {
-      await page.waitForFunction(previous => Array.from(document.querySelectorAll('[role=alert],[role=status],[data-sonner-toast]')).some(n=>n.getClientRects().length && n.textContent.trim() && !previous.includes(n.textContent.trim())), before, {timeout});
-    } catch(error) { if(error.name!=='TimeoutError') throw error; }
-    const messages=(await feedback.allTextContents()).map(s=>s.trim()).filter(s=>s && !before.includes(s)).join(' | ');
-    if (/error|failed|invalid|required|denied|not allowed/i.test(messages)) return {status:'FAIL',detail:'Submission rejected: '+messages};
+    let messages='', busy=false;
+    const deadline=Date.now()+timeout;
+    do {
+      messages=(await readFeedback()).filter(s=>!before.includes(s)).join(' | ');
+      busy=await scope.locator('[aria-busy=true]:visible').count() ||
+        await scope.locator('button:disabled').filter({hasText:/saving|sending|publishing|uploading/i}).count();
+      if(messages && !busy && /error|failed|invalid|required|denied|not allowed|choose|saved|sent|posted|published|created|success/i.test(messages)) break;
+      await page.waitForTimeout(100);
+    } while(Date.now()<deadline);
+    if(busy) return {status:'WARN',detail:'Submission still processing at timeout; outcome not verified'};
+    if (/error|failed|invalid|required|denied|not allowed|choose/i.test(messages)) return {status:'FAIL',detail:'Submission rejected: '+messages};
     if (/saved|sent|posted|published|created|success|uploaded/i.test(messages)) return {status:'PASS',detail:'Submission confirmed by UI: '+messages};
     return {status:'WARN',detail:'Save/send attempted once; no explicit success confirmation observed. '+messages};
   } else {
