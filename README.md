@@ -228,6 +228,11 @@ The prompt requires preserving conflicting claims, numbers, commands and caveats
 
 ## Credentials and account testing
 
+Use the active, ignored `automation_tests/credentials.yml` for existing test
+accounts. Both local credential files are synchronized with the existing DEV Auth
+accounts and contain usable secrets; do not publish them. Editing either file does
+not update an existing account's password in Auth.
+
 Create the local ignored credentials file if it does not exist:
 
 ```powershell
