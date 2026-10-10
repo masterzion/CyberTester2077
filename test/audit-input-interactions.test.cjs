@@ -3,6 +3,76 @@ const assert=require('node:assert/strict');
 const {chromium}=require('playwright');
 const {exclusion,inputValue,priority,discoverControls,performInteraction,probeEmptySubmission}=require('../automation_tests/input-interactions.cjs');
 
+test('discovery leaves HTML unchanged and follows a form whose submit button is replaced', async () => {
+  const browser = await chromium.launch({headless:true});
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<form onsubmit="event.preventDefault();this.querySelector('button').outerHTML='<button>Send comment</button>';this.querySelector('[role=status]').textContent='Comment posted successfully'">
+      <textarea>Regression comment</textarea><button type="submit">Send comment</button><div role="status"></div></form>`);
+    const before = await page.content();
+    const controls = await discoverControls(page);
+    assert.equal(await page.content(), before);
+    const result = await performInteraction(page, controls.find(c => c.type === 'submit'), null, 500, 'QA');
+    assert.equal(result.status, 'PASS');
+    assert.match(result.detail, /Comment posted/);
+  } finally { await browser.close(); }
+});
+
+test('removed forms yield an unverified outcome within the action budget', async () => {
+  const browser = await chromium.launch({headless:true});
+  try {
+    const page = await browser.newPage();
+    page.setDefaultTimeout(1000);
+    await page.setContent(`<form onsubmit="event.preventDefault();this.remove()"><button type="submit">Save</button></form>`);
+    const [button] = await discoverControls(page);
+    const result = await performInteraction(page, button, null, 150, 'QA');
+    assert.equal(result.status, 'WARN');
+    assert.match(result.detail, /no explicit success confirmation/);
+  } finally { await browser.close(); }
+});
+
+test('collapsed media controls are excluded and opening summary reveals them without index drift',async()=>{
+  const browser=await chromium.launch({headless:true});
+  try {
+    const page=await browser.newPage();
+    await page.setContent('<details><summary>Approved media</summary><button onclick="this.textContent=\'Attached\'">Attach</button></details><button>Unrelated</button>');
+    let controls=await discoverControls(page);
+    const media=controls.find(c=>c.tag==='button');
+    assert.equal(media.visible,false);
+    const summary=controls.find(c=>c.tag==='summary');
+    assert.equal((await performInteraction(page,summary,null,500,'QA')).status,'PASS');
+    controls=await discoverControls(page);
+    const visible=controls.find(c=>c.label==='Attach');
+    assert.equal(visible.visible,true);
+    await page.evaluate(()=>document.body.insertAdjacentHTML('afterbegin','<button>New control</button>'));
+    assert.equal((await performInteraction(page,visible,null,500,'QA')).status,'PASS');
+    assert.equal(await page.locator('details button').innerText(),'Attached');
+    await page.locator('details button').evaluate(n=>n.remove());
+    assert.equal((await performInteraction(page,visible,null,500,'QA')).status,'SKIP');
+  } finally {await browser.close();}
+});
+
+test('submission reads explicitly associated feedback outside form',async()=>{
+  const browser=await chromium.launch({headless:true});
+  try {
+    const page=await browser.newPage();
+    await page.setContent(`<form aria-describedby="feedback" onsubmit="event.preventDefault();document.getElementById('feedback').textContent='Post saved.'"><button type="submit">Publish</button></form><p id="feedback" role="status"></p>`);
+    const control=(await discoverControls(page))[0];
+    assert.equal((await performInteraction(page,control,null,500,'QA')).status,'PASS');
+  } finally {await browser.close();}
+});
+
+test('Add Child navigation is not misreported as unconfirmed save',async()=>{
+  const browser=await chromium.launch({headless:true});
+  try {
+    const page=await browser.newPage();
+    await page.setContent(`<button onclick="location.hash='new-child'">Add Child</button>`);
+    const result=await performInteraction(page,(await discoverControls(page))[0],null,500,'QA');
+    assert.equal(result.status,'PASS');
+    assert.match(result.detail,/navigated/);
+  } finally {await browser.close();}
+});
+
 test('guardian policy audit only increases daily allowance and preserves other settings',async()=>{
   const browser=await chromium.launch({headless:true});
   try {
@@ -64,7 +134,7 @@ test('browser fixtures: close overlay, fill, upload, send, verify, and respect o
     assert.equal(await page.locator('textarea').inputValue(),'QA TEST message');
     controls=await discoverControls(page);
     const file=controls.find(c=>c.type==='file');
-    assert.equal((await performInteraction(page,file,null,1500,'QA',{folder:require('node:path').resolve(__dirname,'../automation_tests/child-audit-fixtures'),count:1})).status,'PASS');
+    assert.equal((await performInteraction(page,file,null,1500,'QA',{folder:require('node:path').resolve(__dirname,'../automation_tests/child-audit-fixtures'),count:3})).status,'PASS');
     assert.equal(await page.locator('input[type=file]').evaluate(n=>n.files[0].type),'image/svg+xml');
     const submit=controls.find(c=>c.type==='submit');
     assert.equal((await performInteraction(page,submit,null,1500,'QA')).status,'PASS');

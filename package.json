@@ -3,11 +3,12 @@
   "private": true,
   "version": "0.1.0",
   "scripts": {
-    "audit:ui": "node automation_tests/child-interface-audit.cjs",
+    "audit:ui": "npm test && node automation_tests/child-interface-audit.cjs",
     "audit:report": "node automation_tests/generate-html-report.cjs",
-    "audit:ui:report": "node automation_tests/child-interface-audit.cjs && node automation_tests/generate-html-report.cjs",
-    "audit:accounts": "node automation_tests/run-account-matrix.cjs",
-    "test": "node --test"
+    "audit:ui:report": "npm run audit:ui && node automation_tests/generate-html-report.cjs",
+    "audit:accounts": "npm test && node automation_tests/run-account-matrix.cjs",
+    "test": "node --experimental-test-coverage --test",
+    "test:live:regressions": "node --experimental-test-coverage --test automation_tests/regression.live.cjs"
   },
   "devDependencies": {
     "playwright": "1.62.1",

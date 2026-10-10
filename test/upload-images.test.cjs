@@ -39,7 +39,10 @@ test('selects distinct compatible images and respects single-file limits',async(
     assert.equal(result.uploadedFiles.length,3);
     assert.equal(await page.locator('input').evaluate(n=>n.files.length),3);
     await page.locator('input').evaluate(n=>n.multiple=false);
-    assert.equal((await performInteraction(page,control,null,1500,'QA',config)).status,'WARN');
+    const single = await performInteraction(page,control,null,1500,'QA',config);
+    assert.equal(single.status,'PASS');
+    assert.equal(single.uploadedFiles.length,1);
+    assert.match(single.detail,/input accepts only one file/);
     assert.equal(await page.locator('input').evaluate(n=>n.files.length),1);
   } finally {
     if(browser) await browser.close();

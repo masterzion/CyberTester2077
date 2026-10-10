@@ -10,8 +10,7 @@ const CONTENT_SYSTEM = `Write natural, concise input text for a browser usabilit
 async function generateText(context, request) {
   if(protectedField(context.field)) return {skip:true,reason:'protected identity or password field'};
   const body=await request({system_prompt:CONTENT_SYSTEM,input:JSON.stringify(context),temperature:0.5,max_output_tokens:400,stream:false});
-  const output=body.output || body.choices?.[0]?.message?.content || body.response || '';
-  const raw=Array.isArray(output)?output.filter(x=>x.type!=='reasoning').map(x=>typeof x.content==='string'?x.content:x.text || '').join('\n'):String(output);
+  const raw=require('./model-output.cjs').assistantText(body);
   let parsed;
   try {parsed=JSON.parse(raw.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,''));} catch {return {skip:true,reason:'contextual text model returned invalid JSON'};}
   if(parsed.skip || typeof parsed.value!=='string' || !parsed.value.trim() || /QA TEST|automated test content|lorem ipsum|\d{4}-\d\d-\d\dT\d\d/i.test(parsed.value)) return {skip:true,reason:parsed.reason || 'no suitable contextual text generated'};

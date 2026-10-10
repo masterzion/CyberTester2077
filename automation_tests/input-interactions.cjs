@@ -2,6 +2,11 @@
 const path = require('node:path');
 const {selectImages} = require('./upload-images.cjs');
 const {protectedField} = require('./contextual-text.cjs');
+// DOM properties are invisible to React hydration; audit attributes are not.
+const selectorReady = require('playwright').selectors.register('cybertester', () => ({
+  query(root, id) { return this.queryAll(root, id)[0] || null; },
+  queryAll(root, id) { return [...root.querySelectorAll('*')].filter(node => node[Symbol.for('cybertester.control')] === id); },
+}));
 
 const forbidden = /\b(language|locale|translate|translation|logout|log out|sign out|signoff|switch account|delete|remove|destroy|purchase|buy|pay|subscribe|unsubscribe|reset password|revoke|dev tools)\b/i;
 const submitWords = /\b(save|send|post|publish|share|submit|create|add|apply|confirm)\b/i;
@@ -33,18 +38,23 @@ function inputValue(c, proposed, marker) {
   return marker.slice(0, c.maxLength > 0 ? c.maxLength : undefined);
 }
 async function discoverControls(page) {
-  return page.locator('a,button,input,textarea,select,[role=button],[role=link],[role=checkbox],[role=radio],[contenteditable=true]').evaluateAll(nodes => nodes.map((node,index) => {
+  await selectorReady;
+  return page.locator('a,button,input,textarea,select,summary,[role=button],[role=link],[role=checkbox],[role=radio],[contenteditable=true]').evaluateAll(nodes => nodes.map((node,index) => {
     const get = key => node.getAttribute(key) || '';
     const box = node.getBoundingClientRect();
+    const key = Symbol.for('cybertester.control');
+    if (!node[key]) node[key] = Array.from(crypto.getRandomValues(new Uint32Array(4))).join('-');
+    const collapsed = Array.from(document.querySelectorAll('details:not([open])')).some(details =>
+      details.contains(node) && !details.querySelector(':scope > summary')?.contains(node));
     const languageRegion = node.closest('[role=menu],[role=listbox]');
     const policyPage = /\/parent\/policies\/?$/.test(location.pathname);
     const dailyAllowance = policyPage && node.type === 'number' && /daily.*limit|dienas.*limits/i.test([get('aria-label'),get('name'),node.labels?.[0]?.innerText].join(' '));
-    return {policyPage,dailyAllowance,id:'control-'+index,selector:'a,button,input,textarea,select,[role=button],[role=link],[role=checkbox],[role=radio],[contenteditable=true] >> nth='+index,tag:node.tagName.toLowerCase(),type:get('type'),
+    return {policyPage,dailyAllowance,id:'control-'+index,selector:'cybertester='+node[key],tag:node.tagName.toLowerCase(),type:get('type'),
       developerControl:!!node.closest('nextjs-portal,[data-nextjs-dialog],[data-nextjs-toast]') || node.getRootNode().host?.tagName==='NEXTJS-PORTAL',
       label:(get('aria-label') || node.labels?.[0]?.innerText || get('placeholder') || node.innerText || '').trim().replace(/\s+/g,' ').slice(0,220),
       ariaLabel:get('aria-label'),name:get('name'),autocomplete:get('autocomplete'),href:get('href'),editable:node.isContentEditable,role:get('role'),
       languageControl:!!languageRegion && /language|locale/i.test(languageRegion.getAttribute('aria-label') || ''),
-      visible:!!(box.width && box.height && getComputedStyle(node).visibility!=='hidden' && getComputedStyle(node).display!=='none'),
+      visible:!collapsed && !!(box.width && box.height && getComputedStyle(node).visibility!=='hidden' && getComputedStyle(node).display!=='none'),
       disabled:!!node.disabled || get('aria-disabled')==='true',min:get('min'),max:get('max'),maxLength:node.maxLength,accept:get('accept'),
       options:node.tagName==='SELECT'?Array.from(node.options).map(o=>({value:o.value,text:o.text,selected:o.selected,disabled:o.disabled})):[]};
   }));
@@ -95,6 +105,8 @@ async function performInteraction(page, c, guided, timeout, marker, uploadSettin
   if (blocked) return {status:'SKIP',detail:blocked};
   if (guided?.action === 'observe') return {status:'SKIP',detail:'model requested observation: '+(guided.reason || '')};
   const el = page.locator(c.selector).first();
+  if (!await el.count() || (c.type !== 'file' && !await el.isVisible()))
+    return {status:'SKIP',detail:'Control is no longer available; rediscover the current page'};
   if (c.dailyAllowance) {
     // Read live values, not the earlier inventory: a model proposal must never lower access.
     const current = await el.inputValue();
@@ -118,7 +130,7 @@ async function performInteraction(page, c, guided, timeout, marker, uploadSettin
     await el.setInputFiles(selection.files,{timeout});
     const names=selection.files.map(file=>path.basename(file));
     const limited=names.length<selection.requested;
-    return {status:limited?'WARN':'PASS',detail:'Attached '+names.length+'/'+selection.requested+' random image(s): '+names.join(', ')+(limited?(selection.singleFile?'; input accepts only one file':'; not enough compatible images'):'')+'; submission is a separate step',uploadedFiles:names};
+    return {status:limited && !selection.singleFile?'WARN':'PASS',detail:'Attached '+names.length+'/'+selection.requested+' random image(s): '+names.join(', ')+(limited?(selection.singleFile?'; input accepts only one file':'; not enough compatible images'):'')+'; submission is a separate step',uploadedFiles:names};
   }
   if (c.tag === 'select') {
     const option=c.options.find(o=>!o.disabled && o.value && (guided?.value ? o.value===guided.value : !o.selected));
@@ -138,21 +150,27 @@ async function performInteraction(page, c, guided, timeout, marker, uploadSettin
   } else if (isSubmit(c)) {
     const form = el.locator('xpath=ancestor::form[1]');
     // Bind feedback to the submitted form, excluding independent upload widgets.
-    const scope = await form.count() ? form : page.locator('body');
-    const readFeedback = () => scope.evaluate(node => Array.from(node.querySelectorAll('[role=alert],[role=status],[data-sonner-toast]'))
+    // Keep the form itself: successful submissions can replace their button,
+    // invalidating a locator anchored to the original control.
+    const scope = await el.evaluateHandle(node => node.form || node.closest('form') || document.body);
+    try {
+    const readFeedback = () => scope.evaluate(node => [...Array.from(node.querySelectorAll('[role=alert],[role=status],[data-sonner-toast]')), ...String(node.getAttribute('aria-describedby') || '').split(/\s+/).map(id=>document.getElementById(id)).filter(Boolean)]
       .filter(n => n.getClientRects().length && !n.closest('[data-interaction-region="media-upload"],#profile-picture'))
       .map(n => n.textContent.trim()).filter(Boolean));
     const before = await readFeedback();
     const invalidBefore = await form.locator(':invalid').count().catch(()=>0);
+    const beforeUrl = page.url();
     await el.click({timeout});
+    if (page.url() !== beforeUrl) return {status:'PASS',detail:'Control navigated to another page; no data submission inferred'};
     const invalid = invalidBefore && await form.locator(':invalid').count().catch(()=>0);
     if (invalid) return {status:'WARN',detail:'Submission blocked by browser validation ('+invalid+' invalid field(s)); not saved/sent'};
     let messages='', busy=false;
     const deadline=Date.now()+timeout;
     do {
+      if (page.url() !== beforeUrl) return {status:'PASS',detail:'Control navigated to another page; no data submission inferred'};
       messages=(await readFeedback()).filter(s=>!before.includes(s)).join(' | ');
-      busy=await scope.locator('[aria-busy=true]:visible').count() ||
-        await scope.locator('button:disabled').filter({hasText:/saving|sending|publishing|uploading/i}).count();
+      busy=await scope.evaluate(node => [...node.querySelectorAll('[aria-busy=true],button:disabled')]
+        .some(n => n.getClientRects().length && (n.getAttribute('aria-busy') === 'true' || /saving|sending|publishing|uploading/i.test(n.textContent))));
       if(messages && !busy && /error|failed|invalid|required|denied|not allowed|choose|saved|sent|posted|published|created|success/i.test(messages)) break;
       await page.waitForTimeout(100);
     } while(Date.now()<deadline);
@@ -160,6 +178,9 @@ async function performInteraction(page, c, guided, timeout, marker, uploadSettin
     if (/error|failed|invalid|required|denied|not allowed|choose/i.test(messages)) return {status:'FAIL',detail:'Submission rejected: '+messages};
     if (/saved|sent|posted|published|created|success|uploaded/i.test(messages)) return {status:'PASS',detail:'Submission confirmed by UI: '+messages};
     return {status:'WARN',detail:'Save/send attempted once; no explicit success confirmation observed. '+messages};
+    } finally {
+      await scope.dispose();
+    }
   } else {
     await el.click({timeout});
   }
