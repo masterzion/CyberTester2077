@@ -9,7 +9,6 @@ const selectorReady = require('playwright').selectors.register('cybertester', ()
 }));
 
 const forbidden = /\b(language|locale|translate|translation|logout|log out|sign out|signoff|switch account|delete|remove|destroy|purchase|buy|pay|subscribe|unsubscribe|reset password|revoke|dev tools)\b/i;
-const submitWords = /\b(save|send|post|publish|share|submit|create|add|apply|confirm)\b/i;
 function exclusion(c) {
   if (c.policyPage && isInput(c) && !c.dailyAllowance) return 'preserve existing guardian policy settings';
   if (protectedField(c)) return 'protected identity or password field';
@@ -19,7 +18,7 @@ function exclusion(c) {
   if (['password','hidden'].includes(c.type)) return 'protected input';
   return '';
 }
-function isSubmit(c) { return c.type === 'submit' || (c.tag === 'button' && submitWords.test(c.label || c.ariaLabel || '')); }
+function isSubmit(c) { return c.submitControl ?? (c.type === 'submit'); }
 function isInput(c) { return c.editable || c.tag === 'textarea' || c.tag === 'select' || (c.tag === 'input' && !['button','submit','hidden','password','reset'].includes(c.type)); }
 function priority(c) { return exclusion(c) ? 100 : isInput(c) ? 0 : isSubmit(c) ? 1 : 2; }
 function inputValue(c, proposed, marker) {
@@ -42,6 +41,8 @@ async function discoverControls(page) {
   return page.locator('a,button,input,textarea,select,summary,[role=button],[role=link],[role=checkbox],[role=radio],[contenteditable=true]').evaluateAll(nodes => nodes.map((node,index) => {
     const get = key => node.getAttribute(key) || '';
     const box = node.getBoundingClientRect();
+    const modal = [...document.querySelectorAll('dialog[open],[aria-modal=true]')].filter(n=>n.getClientRects().length).at(-1);
+    const modalBlocked = !!modal && !modal.contains(node);
     const key = Symbol.for('cybertester.control');
     if (!node[key]) node[key] = Array.from(crypto.getRandomValues(new Uint32Array(4))).join('-');
     const collapsed = Array.from(document.querySelectorAll('details:not([open])')).some(details =>
@@ -49,12 +50,12 @@ async function discoverControls(page) {
     const languageRegion = node.closest('[role=menu],[role=listbox]');
     const policyPage = /\/parent\/policies\/?$/.test(location.pathname);
     const dailyAllowance = policyPage && node.type === 'number' && /daily.*limit|dienas.*limits/i.test([get('aria-label'),get('name'),node.labels?.[0]?.innerText].join(' '));
-    return {policyPage,dailyAllowance,id:'control-'+index,selector:'cybertester='+node[key],tag:node.tagName.toLowerCase(),type:get('type'),
+    return {policyPage,dailyAllowance,modalBlocked,submitControl:!!node.form && ['submit','image'].includes(node.type),id:'control-'+index,selector:'cybertester='+node[key],tag:node.tagName.toLowerCase(),type:get('type'),
       developerControl:!!node.closest('nextjs-portal,[data-nextjs-dialog],[data-nextjs-toast]') || node.getRootNode().host?.tagName==='NEXTJS-PORTAL',
       label:(get('aria-label') || node.labels?.[0]?.innerText || get('placeholder') || node.innerText || '').trim().replace(/\s+/g,' ').slice(0,220),
       ariaLabel:get('aria-label'),name:get('name'),autocomplete:get('autocomplete'),href:get('href'),editable:node.isContentEditable,role:get('role'),
       languageControl:!!languageRegion && /language|locale/i.test(languageRegion.getAttribute('aria-label') || ''),
-      visible:!collapsed && !!(box.width && box.height && getComputedStyle(node).visibility!=='hidden' && getComputedStyle(node).display!=='none'),
+      visible:!modalBlocked && !collapsed && !!(box.width && box.height && getComputedStyle(node).visibility!=='hidden' && getComputedStyle(node).display!=='none'),
       disabled:!!node.disabled || get('aria-disabled')==='true',min:get('min'),max:get('max'),maxLength:node.maxLength,accept:get('accept'),
       options:node.tagName==='SELECT'?Array.from(node.options).map(o=>({value:o.value,text:o.text,selected:o.selected,disabled:o.disabled})):[]};
   }));
@@ -69,9 +70,11 @@ async function closeBlockingMenus(page, target) {
   await menus.first().waitFor({state:'hidden'});
 }
 async function probeEmptySubmission(page, c, timeout) {
-  if (c.policyPage) return null;
+  if (c.policyPage || !isSubmit(c)) return null;
   const el=page.locator(c.selector).first();
   const state=await el.evaluate(button=>{
+    const modal=[...document.querySelectorAll('dialog[open],[aria-modal=true]')].filter(n=>n.getClientRects().length).at(-1);
+    if ((modal && !modal.contains(button)) || !button.form || !['submit','image'].includes(button.type)) return null;
     let scope=button.form || button.parentElement;
     const fields='textarea,input:not([type=hidden]):not([type=submit]):not([type=button]),[contenteditable=true],select';
     while(scope && !scope.querySelector(fields) && scope.tagName!=='BODY') scope=scope.parentElement;
@@ -107,6 +110,11 @@ async function performInteraction(page, c, guided, timeout, marker, uploadSettin
   const el = page.locator(c.selector).first();
   if (!await el.count() || (c.type !== 'file' && !await el.isVisible()))
     return {status:'SKIP',detail:'Control is no longer available; rediscover the current page'};
+  const modalBlocked = await el.evaluate(node => {
+    const modal=[...document.querySelectorAll('dialog[open],[aria-modal=true]')].filter(n=>n.getClientRects().length).at(-1);
+    return !!modal && !modal.contains(node);
+  });
+  if (modalBlocked) return {status:'SKIP',detail:'Control is blocked by the active modal; rediscover modal controls'};
   if (c.dailyAllowance) {
     // Read live values, not the earlier inventory: a model proposal must never lower access.
     const current = await el.inputValue();
@@ -147,7 +155,7 @@ async function performInteraction(page, c, guided, timeout, marker, uploadSettin
     } else if (c.type === 'color') {
       return {status:'SKIP',detail:'native color picker is not supported by this executor'};
     } else await el.fill(value);
-  } else if (isSubmit(c)) {
+  } else if (isSubmit(c) || (c.tag === 'button' && /\b(save|send|post|publish|share|submit|apply|confirm)\b/i.test(c.label || c.ariaLabel || ''))) {
     const form = el.locator('xpath=ancestor::form[1]');
     // Bind feedback to the submitted form, excluding independent upload widgets.
     // Keep the form itself: successful submissions can replace their button,
@@ -171,18 +179,24 @@ async function performInteraction(page, c, guided, timeout, marker, uploadSettin
       messages=(await readFeedback()).filter(s=>!before.includes(s)).join(' | ');
       busy=await scope.evaluate(node => [...node.querySelectorAll('[aria-busy=true],button:disabled')]
         .some(n => n.getClientRects().length && (n.getAttribute('aria-busy') === 'true' || /saving|sending|publishing|uploading/i.test(n.textContent))));
-      if(messages && !busy && /error|failed|invalid|required|denied|not allowed|choose|saved|sent|posted|published|created|success/i.test(messages)) break;
+      if(messages && !busy && /error|failed|invalid|required|denied|not allowed|choose|saved|sent|posted|published|created|success|submitted for school approval/i.test(messages)) break;
       await page.waitForTimeout(100);
     } while(Date.now()<deadline);
     if(busy) return {status:'WARN',detail:'Submission still processing at timeout; outcome not verified'};
     if (/error|failed|invalid|required|denied|not allowed|choose/i.test(messages)) return {status:'FAIL',detail:'Submission rejected: '+messages};
-    if (/saved|sent|posted|published|created|success|uploaded/i.test(messages)) return {status:'PASS',detail:'Submission confirmed by UI: '+messages};
+    if (/saved|sent|posted|published|created|success|uploaded|submitted for school approval/i.test(messages)) return {status:'PASS',detail:'Submission confirmed by UI: '+messages};
     return {status:'WARN',detail:'Save/send attempted once; no explicit success confirmation observed. '+messages};
+    } catch (error) {
+      if (!page.isClosed() && /Execution context was destroyed|Cannot find context with specified id/.test(error.message))
+        return {status:'WARN',detail:'Navigation interrupted submission feedback; submission was attempted once, outcome not verified'};
+      throw error;
     } finally {
       await scope.dispose();
     }
   } else {
+    const beforeUrl = page.url();
     await el.click({timeout});
+    if (page.url() !== beforeUrl) return {status:'PASS',detail:'Control navigated to another page; no data submission inferred'};
   }
   return {status:'PASS',detail:isInput(c)?'Test input applied; submission is a separate step':'Control interacted with; business outcome not verified'};
 }

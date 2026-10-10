@@ -1,6 +1,7 @@
 'use strict';
 
-async function navigate(page, url, timeout = 30000) {
+// DEV routes compile on first access; keep an explicit bounded traversal budget.
+async function navigate(page, url, timeout = 60000) {
   let receive;
   const download = new Promise(resolve => { receive = resolve; });
   page.on('download', receive);
