@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const YAML = require('yaml');
+const { accountTarget } = require('./account-target.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const OUTPUT_ROOT = path.join(__dirname, 'output');
@@ -44,6 +45,7 @@ function runAudit(account, platform, profile) {
     return { status: 'SKIP', output: null };
   }
   const env = {
+    APP_URL: accountTarget(account, settings).appUrl,
     AUDIT_RUN_ID: runId,
     AUDIT_PLATFORM: platform,
     AUDIT_SCREEN_PROFILE: profile?.name || '',
@@ -80,7 +82,7 @@ function main() {
   const results = [];
   for (const account of accounts) {
     if (!account.name || !account.role || !account.email) { console.error('[SKIP] invalid account entry'); continue; }
-    if (includeWeb && account.runtest_web === true) results.push({ account: account.name, platform: 'web', ...runAudit(account, 'web') });
+    if (includeWeb && (account.runtest_web === true || (account.runtest_admin === true && accountTarget(account, settings).admin))) results.push({ account: account.name, platform: 'web', ...runAudit(account, 'web') });
     if (includeMobile && account.runtest_mobile === true) {
       if (settings.mobile?.enabled !== true) { console.warn('[SKIP] mobile disabled in automation settings: ' + account.name); continue; }
       if (!profiles.length) { console.warn('[SKIP] no mobile screen profiles configured: ' + account.name); continue; }

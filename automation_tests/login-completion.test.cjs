@@ -31,6 +31,8 @@ test('real browser completes consent and rejects callback/session failures befor
     const enter = () => page.goto(`http://127.0.0.1:${issuer.address().port}`);
     const complete = () => completeLogin(page, origin, () => 5000);
     await enter(); await complete(); assert.equal(new URL(page.url()).pathname, '/home');
+    user = { sub: 'operator-fixture' };
+    await enter(); await complete(); assert.equal(new URL(page.url()).pathname, '/home');
     callbackStatus = 401;
     await enter(); await assert.rejects(complete(), /authenticated application page/);
     callbackStatus = 302;

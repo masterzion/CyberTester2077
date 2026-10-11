@@ -15,6 +15,7 @@ async function completeLogin(page, appOrigin, remaining) {
   if (response.status() === 404) return; // Other audited applications may not expose this optional contract.
   if (!response.ok()) throw new Error('Application session validation failed');
   const session = await response.json();
-  if (!session.user?.id) throw new Error('Application session is not authenticated');
+  if (session.authenticated === false || !(session.user?.id || session.user?.sub))
+    throw new Error('Application session is not authenticated');
 }
 module.exports = { completeLogin };

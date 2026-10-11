@@ -19,6 +19,7 @@ const FIXTURES = path.join(__dirname, 'child-audit-fixtures');
 const asBoolean = (value, fallback) => value === undefined ? fallback : !/^(false|0|no)$/i.test(String(value));
 const cfg = { appUrl: process.env.APP_URL || settings.web?.app_url || 'http://127.0.0.1:3000', modelUrl: process.env.MODEL_URL || settings.llm?.endpoint || 'http://192.168.2.110:1234/api/v1/chat', model: process.env.MODEL_NAME || settings.llm?.playwright_model || 'ornith-1.5-35b-a3b', apiKeyEnv: settings.llm?.api_key_env || 'LLM_API_KEY', accountName: process.env.AUDIT_ACCOUNT_NAME || 'Test account', role: process.env.AUDIT_ACCOUNT_ROLE || 'child', roleDescription: process.env.AUDIT_ACCOUNT_DESCRIPTION || '', email: process.env.CHILD_EMAIL || '', password: process.env.CHILD_PASSWORD || '', headless: asBoolean(process.env.HEADLESS, settings.web?.headless ?? true), maxPages: Number(process.env.AUDIT_MAX_PAGES || settings.web?.max_pages || 30), maxActions: Number(process.env.AUDIT_MAX_ACTIONS_PER_PAGE || settings.web?.max_actions_per_page || 50), actionTimeoutMs: Number(process.env.AUDIT_ACTION_TIMEOUT_MS || settings.web?.action_timeout_ms || 5000), maxDocumentationDocs: Number(process.env.AUDIT_MAX_DOCUMENTS || 8) };
 cfg.roleDocumentation = process.env.AUDIT_ROLE_DOCUMENTATION || '';
+cfg.appUrl = require('./account-target.cjs').accountTarget({ role: cfg.role }, settings).appUrl;
 cfg.loginTimeoutMs = Number(process.env.AUDIT_LOGIN_TIMEOUT_MS || 20000);
 if (!Number.isInteger(cfg.loginTimeoutMs) || cfg.loginTimeoutMs <= 0) throw new Error('login_timeout_seconds must be a positive timeout');
 if (!Number.isInteger(cfg.actionTimeoutMs) || cfg.actionTimeoutMs <= 0) throw new Error('action_timeout_ms must be a positive timeout');
@@ -257,4 +258,4 @@ if (require.main === module) {
     executionStatus = 'failed'; note('Audit execution', 'FAIL', error.message); console.error(error); process.exitCode = 1;
   }).finally(() => { clearInterval(progressTimer); executionFinishedAt = new Date().toISOString(); publishProgress(); });
 }
-module.exports = { cfg, settings, DOCS_ROOT, matchCurrentControl, executionCandidates, controlKey, waitForPageReady };
+module.exports = { cfg, settings, DOCS_ROOT, matchCurrentControl, executionCandidates, controlKey, waitForPageReady, login };
