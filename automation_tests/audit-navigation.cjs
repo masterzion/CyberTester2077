@@ -1,7 +1,7 @@
 'use strict';
 
 // DEV routes compile on first access; keep an explicit bounded traversal budget.
-async function navigate(page, url, timeout = 60000) {
+async function navigate(page, url, timeout = 60000, downloadTimeout = timeout) {
   let receive;
   const download = new Promise(resolve => { receive = resolve; });
   page.on('download', receive);
@@ -20,7 +20,7 @@ async function navigate(page, url, timeout = 60000) {
       let failure;
       try {
         failure = await Promise.race([item.failure(), new Promise((_, reject) => {
-          timer = setTimeout(() => reject(new Error('Download completion timed out')), timeout);
+          timer = setTimeout(() => reject(new Error('Download completion timed out')), downloadTimeout);
         })]);
       } catch (error) {
         await item.cancel();

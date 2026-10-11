@@ -11,6 +11,11 @@ test('design state reads designated content, not global or child background busy
     const page = await browser.newPage();
     await page.setContent('<header data-session-state="restoring">Session</header><main><h1>Public information</h1><span aria-busy="true">Polling</span></main>');
     assert.equal(await readDesignState(page), 'ready');
+    await page.locator('main').evaluate(root => {const status = document.createElement('p');status.dataset.designLoading = 'true';status.textContent = 'Loading children';root.append(status);});
+    assert.equal(await readDesignState(page), 'restoring');
+    await page.locator('[data-design-loading]').evaluate(node => node.hidden = true);
+    assert.equal(await readDesignState(page), 'ready');
+    await page.locator('[data-design-loading]').evaluate(node => node.remove());
     const identity = await contentIdentity(page);
     await page.locator('span').evaluate(node => node.textContent = 'Updated polling');
     await page.evaluate(() => {const script = document.createElement('script');script.type='application/json';script.textContent='{"hydration":2}';document.querySelector('main').append(script);});

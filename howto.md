@@ -33,6 +33,8 @@ Controls browser audits of the web app.
 | `max_pages` | int | `30` | Maximum number of pages/tabs the auditor may open. |
 | `max_actions_per_page` | int | `50` | Maximum interactions per page before moving on. |
 | `action_timeout_ms` | int | `5000` | Milliseconds to wait for a single actionable control. |
+| `navigation_timeout_ms` | int | `120000` | Budget for opening a page or starting a download. |
+| `download_timeout_ms` | int | `300000` | Separate transfer budget after a download starts; incomplete transfers remain failures. |
 
 ### `upload_images`
 

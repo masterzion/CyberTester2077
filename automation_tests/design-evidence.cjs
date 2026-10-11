@@ -10,6 +10,8 @@ async function readDesignState(page) {
     const markers = scopes.flatMap(root => [root, ...root.querySelectorAll('[data-session-state]')]).filter(visible);
     if (markers.some(element => element.dataset.sessionState === 'unavailable')) return 'unavailable';
     if (markers.some(element => element.dataset.sessionState === 'restoring')) return 'restoring';
+    // Explicit foreground loading markers are distinct from background polling.
+    if (scopes.some(root => [...root.querySelectorAll('[data-design-loading="true"]')].some(visible))) return 'restoring';
     // ARIA fallback applies to the content root itself, never every busy child.
     if (scopes.some(root => visible(root) && root.getAttribute('aria-busy') === 'true')) return 'restoring';
     return visible(document.body) ? 'ready' : 'restoring';

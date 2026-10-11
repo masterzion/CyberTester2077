@@ -1,6 +1,15 @@
 const test=require('node:test');
 const assert=require('node:assert/strict');
 const {attachNetworkEvidence}=require('../automation_tests/network-evidence.cjs');
+test('optional DEV fixture absence is informational, while enrollment errors remain failures',()=>{
+ const listeners={}; const events=[];
+ attachNetworkEvidence({on:(name,fn)=>listeners[name]=fn,url:()=>'/messages'},(...args)=>events.push(args));
+ const response=(status,path,method='GET')=>({status:()=>status,url:()=>`https://example.test/api/gateway/messages/${path}`,request:()=>({method:()=>method})});
+ listeners.response(response(404,'dev-device'));
+ listeners.response(response(503,'dev-device'));
+ listeners.response(response(400,'device-keys','POST'));
+ assert.deepEqual(events.map(event=>event[0]),['info','error','error']);
+});
 test('failed responses retain endpoint and method but never signed queries or payloads',()=>{
  let listener; const events=[];
  attachNetworkEvidence({on:(_,fn)=>listener=fn,url:()=>'/parent/profile'},(...args)=>events.push(args));

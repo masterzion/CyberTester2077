@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const {waitForPageReady} = require('../automation_tests/child-interface-audit.cjs');
 const {TESTER_SYSTEM_PROMPT} = require('../automation_tests/tester-system-prompt.cjs');
 
-test('loaded pages proceed without waiting for network idle or a fixed delay', async () => {
+test('DOM-ready pages proceed without waiting for network idle or a fixed delay', async () => {
   const calls = [];
   await waitForPageReady({
     async waitForLoadState(state) { calls.push(state); },
@@ -16,7 +16,7 @@ test('loaded pages proceed without waiting for network idle or a fixed delay', a
       }};
     }
   });
-  assert.deepEqual(calls, ['load', 'visible']);
+  assert.deepEqual(calls, ['domcontentloaded', 'visible']);
 });
 
 test('readiness failures propagate rather than interacting on an unloaded page', async () => {

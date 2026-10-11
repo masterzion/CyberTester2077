@@ -3,6 +3,24 @@ const assert = require('node:assert/strict');
 const {chromium} = require('playwright');
 const {navigate} = require('../automation_tests/audit-navigation.cjs');
 
+test('download completion uses its separate transfer budget and removes listeners', async () => {
+  let receive; let cancelled = false; let navigationTimeout;
+  const page = {
+    on: (_name, listener) => { receive = listener; },
+    off: (_name, listener) => { assert.equal(listener, receive); receive = null; },
+    goto: async (_url, options) => {
+      navigationTimeout = options.timeout;
+      receive({ failure: () => new Promise(resolve => setTimeout(() => resolve(null), 30)),
+        cancel: async () => { cancelled = true; }, suggestedFilename: () => 'app.apk' });
+      throw new Error('Download is starting');
+    },
+  };
+  assert.deepEqual(await navigate(page, 'http://fixture.test/download', 10, 200), {kind:'download', filename:'app.apk'});
+  assert.equal(navigationTimeout, 10);
+  assert.equal(cancelled, false);
+  assert.equal(receive, null);
+});
+
 test('cancelled and stalled downloads fail verification instead of passing or hanging', {timeout:15000}, async () => {
   const http = require('node:http');
   const server = http.createServer((_request, response) => {

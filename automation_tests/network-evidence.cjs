@@ -12,6 +12,13 @@ function attachNetworkEvidence(page, record) {
   page.on('response', response => {
     if(response.status()<400) return;
     const endpoint=new URL(response.url());
+    // The optional DEV fixture deliberately returns 404 for teachers. The
+    // client then enrolls its own device; preserve evidence without a false failure.
+    if (response.status() === 404 && response.request().method() === 'GET' &&
+        endpoint.pathname === '/api/gateway/messages/dev-device') {
+      record('info', 'Development messaging fixture unavailable; ordinary device enrollment applies', page.url());
+      return;
+    }
     record('error', `HTTP ${response.status()} ${response.request().method()} ${endpoint.origin}${endpoint.pathname}`, page.url());
   });
 }

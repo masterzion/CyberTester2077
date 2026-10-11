@@ -5,7 +5,7 @@ const path=require('node:path');
 const {chromium}=require('playwright');
 test('overview comes first and design narrative lives inside the two design sections',async()=>{
  const template=fs.readFileSync(path.join(__dirname,'../automation_tests/report-template.html'),'utf8');
- const meta={account:'Fixture',role:'parent',platform:'mobile',timezone:'Europe/Riga',errors:[],designReviewed:true,designNarrative:{'broken design':'Layout defects summary','design improvement':'Optional refinements summary'},design:[{category:'broken design',component:'Goals',evidence:'Text overlaps progress',suggestion:'Wrap text',url:'/goals',at:'2026-09-28T10:00:00Z'}]};
+ const meta={account:'Fixture',role:'parent',platform:'mobile',timezone:'Europe/Riga',errors:[],designReviewed:true,designNarrative:{'broken design':'Layout defects summary','design improvement':'Optional refinements summary'},design:[{category:'broken design',component:'Goals',evidence:'Text overlaps progress',suggestion:'Wrap text',url:'/goals',occurrences:[{url:'/goals',screenshot:'goals.png'},{url:'/settings',screenshot:'settings.png'}],at:'2026-09-28T10:00:00Z'}]};
  const values={SUMMARY_JSON:JSON.stringify({pages:1}),ROWS_JSON:'[]',MODELS_JSON:'[]',META_JSON:JSON.stringify(meta)};
  const browser=await chromium.launch({headless:true});
  try {
@@ -16,6 +16,9 @@ test('overview comes first and design narrative lives inside the two design sect
   assert.equal(await page.locator('#errors,#issues,#errorlist,#findings').count(),0);
   assert.equal(await page.locator('#broken-design .design-summary').innerText(),'Layout defects summary');
   assert.match(await page.locator('#broken-design').innerText(),/Wrap text/);
+  assert.match(await page.locator('#broken-design').innerText(),/\/goals, \/settings/);
+  assert.equal(await page.locator('#broken-items .design-card').count(),1);
+  assert.deepEqual(await page.locator('#broken-items a').evaluateAll(nodes=>nodes.map(node=>node.getAttribute('href'))),['goals.png','settings.png']);
   assert.equal(await page.locator('#design-improvement .design-summary').innerText(),'Optional refinements summary');
   await page.setViewportSize({width:360,height:800});
   assert.equal(await page.locator('#broken-items').evaluate(n=>getComputedStyle(n).gridTemplateColumns.split(' ').length),1);
