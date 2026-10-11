@@ -21,6 +21,8 @@ const cfg = { appUrl: process.env.APP_URL || settings.web?.app_url || 'http://12
 cfg.roleDocumentation = process.env.AUDIT_ROLE_DOCUMENTATION || '';
 cfg.appUrl = require('./account-target.cjs').accountTarget({ role: cfg.role }, settings).appUrl;
 cfg.loginTimeoutMs = Number(process.env.AUDIT_LOGIN_TIMEOUT_MS || 20000);
+cfg.navigationTimeoutMs = Number(settings.web?.navigation_timeout_ms || 120000);
+if (!Number.isSafeInteger(cfg.navigationTimeoutMs) || cfg.navigationTimeoutMs <= 0) throw new Error('navigationTimeoutMs must be a positive timeout');
 if (!Number.isInteger(cfg.loginTimeoutMs) || cfg.loginTimeoutMs <= 0) throw new Error('login_timeout_seconds must be a positive timeout');
 if (!Number.isInteger(cfg.actionTimeoutMs) || cfg.actionTimeoutMs <= 0) throw new Error('action_timeout_ms must be a positive timeout');
 if (process.env.AUDIT_ACTION_TIMEOUT_MS === undefined) process.env.AUDIT_ACTION_TIMEOUT_MS = String(cfg.actionTimeoutMs);
@@ -90,8 +92,8 @@ function sameOrigin(url, origin) { try { return new URL(url).origin === origin; 
 function parseJson(value) { const text = String(value || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''); try { return JSON.parse(text); } catch {} for (let start = text.indexOf('{'); start >= 0; start = text.indexOf('{', start + 1)) { let depth = 0, quote = '', escaped = false; for (let end = start; end < text.length; end++) { const char = text[end]; if (quote) { if (!escaped && char === quote) quote = ''; escaped = !escaped && char === '\\'; continue; } if (char === '"' || char === "'") { quote = char; continue; } if (char === '{') depth++; if (char === '}' && --depth === 0) { try { return JSON.parse(text.slice(start, end + 1)); } catch { break; } } } } return null; }
 function defaultAcceptanceTests(controls) { return controls.map(control => ({ id: control.id, given: control.visible ? 'the component is visible to the signed-in ' + cfg.role : 'the component is present but unavailable', when: 'the ' + cfg.role + ' uses ' + (control.label || control.tag || control.id), then: control.disabled || !control.visible ? 'it remains unavailable without causing an error' : 'the intended state change or feedback is visible and no console error is produced', priority: control.type === 'file' || /message|friend|post|activity|approval|review/i.test(control.label + ' ' + control.ariaLabel) ? 'high' : 'medium' })); }
 async function waitForPageReady(page) {
-  const deadline = Date.now() + cfg.actionTimeoutMs;
-  await page.waitForLoadState('load', {timeout: cfg.actionTimeoutMs});
+  const deadline = Date.now() + cfg.navigationTimeoutMs;
+  await page.waitForLoadState('domcontentloaded', {timeout: cfg.navigationTimeoutMs});
   // Background polling must not delay a loaded page. Individual actions still
   // wait for their target to become visible, enabled, and actionable.
   await page.locator('body').waitFor({state:'visible',timeout:Math.max(1,deadline-Date.now())});
@@ -174,8 +176,28 @@ async function inspect(page, origin) {
   const url = page.url();
   if (visited.has(url) || !sameOrigin(url, origin) || audit.pages.length >= cfg.maxPages) return [];
   visited.add(url);
-  const found = await discover(page);
-  const evidence = {url, title:await page.title(), html:await page.content(), text:await page.locator('body').innerText().catch(()=>''), console:audit.console.filter(item=>item.url===url), controls:found.filter(item=>item.visible && !item.disabled), screenshot:await screenshot(page,'page-'+(audit.pages.length+1))};
+  const capture = await require('./design-evidence.cjs').captureDesignEvidence(page, {
+    timeoutMs: cfg.navigationTimeoutMs,
+    discover,
+    screenshot: async timeout => {
+      const file = path.join(RUN_DIR, 'screenshots', Date.now()+'-page-'+(audit.pages.length+1)+'.png');
+      fs.mkdirSync(path.dirname(file), {recursive:true});
+      await page.screenshot({path:file,fullPage:true,animations:'disabled',timeout:Math.min(cfg.actionTimeoutMs,timeout)});
+      return file;
+    }
+  }).catch(() => ({status:'failed',reason:'Design evidence capture failed; runtime diagnostics remain recorded separately'}));
+  if(capture.status === 'ready' && capture.evidence.url !== url) {
+    capture.status = 'incomplete';
+    capture.reason = 'Navigation replaced the inspected page during design readiness';
+  }
+  if(capture.status !== 'ready') {
+    note('Design evidence readiness', capture.status === 'failed' ? 'FAIL' : 'WARN', capture.reason,
+      {url:page.url(),outcomeVerified:false,designEvidenceStatus:capture.status});
+    audit.pages.push({url:page.url(),designEvidenceStatus:capture.status,diagnostic:capture.reason});
+    return [];
+  }
+  const found = capture.evidence.controls;
+  const evidence = {...capture.evidence, console:audit.console.filter(item=>item.url===capture.evidence.url), controls:found.filter(item=>item.visible && !item.disabled)};
   const coverage = {url, title:evidence.title, screenshot:evidence.screenshot, controls:found.length, hidden:0, disabled:0, revealed:0};
   audit.pages.push(coverage);
   audit.controls.push(...found.map(item=>({pageUrl:url,...item})));

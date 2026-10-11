@@ -4,6 +4,10 @@ function completeAudit(results, target = process) {
     target.exitCode = 1;
     return 'failed';
   }
+  if (results.some(result => result.outcomeVerified === false || result.extra?.outcomeVerified === false)) {
+    target.exitCode = 1;
+    return 'incomplete';
+  }
   return 'completed';
 }
 module.exports = { completeAudit };
