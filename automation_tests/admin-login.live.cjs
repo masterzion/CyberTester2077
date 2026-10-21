@@ -6,6 +6,7 @@ const YAML = require('yaml');
 const { chromium } = require('playwright');
 const { accountTarget } = require('./account-target.cjs');
 const { cfg, login } = require('./child-interface-audit.cjs');
+const settings = YAML.parse(fs.readFileSync(path.join(__dirname, 'automation-settings.yml'), 'utf8'));
 
 const accounts = YAML.parse(fs.readFileSync(path.join(__dirname, 'credentials.yml'), 'utf8')).accounts;
 
@@ -14,8 +15,8 @@ for (const role of ['event_add', 'root', 'review']) {
   test(`${role} signs into ADM and lands on /home with its own operator session`, { timeout: 240000 }, async () => {
     const account = accounts.find(row => row.role === role && row.runtest_web === true);
     assert.ok(account, `Missing configured ${role} account`);
-    const target = accountTarget(account, { admin: { app_url: 'https://adm.viafactor.com' } }, {});
-    assert.equal(target.appUrl, 'https://adm.viafactor.com');
+    const target = accountTarget(account, settings, {});
+    assert.equal(new URL(target.appUrl).hostname, 'localhost');
     Object.assign(cfg, {
       appUrl: target.appUrl, role, accountName: account.name,
       email: account.email, password: account.password_env ? process.env[account.password_env] : account.password,
@@ -33,7 +34,7 @@ for (const role of ['event_add', 'root', 'review']) {
           callbackDestination = response.headers().location;
       });
       await login(page);
-      assert.equal(callbackDestination, 'https://adm.viafactor.com/home');
+      assert.equal(callbackDestination, new URL('/home', target.appUrl).href);
       const landing = new URL(page.url());
       assert.equal(landing.origin, target.appUrl);
       assert.equal(landing.pathname, '/home');

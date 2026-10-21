@@ -28,13 +28,19 @@ Controls browser audits of the web app.
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `app_url` | string | `http://127.0.0.1:3000` | Base URL of the application under audit. |
+| `app_url` | string | `http://localhost:3002` | Base URL of the local Viafactor DEV web application. |
 | `headless` | bool | `true` | Run Chromium without a visible window. |
 | `max_pages` | int | `30` | Maximum number of pages/tabs the auditor may open. |
 | `max_actions_per_page` | int | `50` | Maximum interactions per page before moving on. |
 | `action_timeout_ms` | int | `5000` | Milliseconds to wait for a single actionable control. |
 | `navigation_timeout_ms` | int | `120000` | Budget for opening a page or starting a download. |
 | `download_timeout_ms` | int | `300000` | Separate transfer budget after a download starts; incomplete transfers remain failures. |
+
+For the Viafactor DEV profile, use `http://localhost:3002` for Web and
+`http://localhost:3040` for ADM. Learn runs at `http://localhost:3100`; product
+API requests from Web use its same-origin `/api/gateway` route. The Auth browser
+transport is `http://localhost:8030`; its canonical OAuth issuer remains
+`https://auth.viafactor.com` as required by the application contract.
 
 ### `upload_images`
 
