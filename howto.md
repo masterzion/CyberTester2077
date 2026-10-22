@@ -41,6 +41,11 @@ For the Viafactor DEV profile, use `http://localhost:3002` for Web and
 API requests from Web use its same-origin `/api/gateway` route. The Auth browser
 transport is `http://localhost:8030`; its canonical OAuth issuer remains
 `https://auth.viafactor.com` as required by the application contract.
+Live browser tests abort requests and redirects outside loopback, close the
+browser context, and fail with a `[LOCAL-ONLY ERROR]` message. Remote redirect
+targets in API reads also fail before the redirect is followed. Login flows
+must use the local Auth browser transport; a redirect to the canonical public
+issuer stops the test, while the issuer identity remains unchanged.
 
 ### `upload_images`
 

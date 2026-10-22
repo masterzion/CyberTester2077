@@ -6,6 +6,7 @@ const YAML = require('yaml');
 const { chromium } = require('playwright');
 const { accountTarget } = require('./account-target.cjs');
 const { cfg, login } = require('./child-interface-audit.cjs');
+const { assertLocalUrl, localRequestGet } = require('./local-only.cjs');
 const settings = YAML.parse(fs.readFileSync(path.join(__dirname, 'automation-settings.yml'), 'utf8'));
 
 const accounts = YAML.parse(fs.readFileSync(path.join(__dirname, 'credentials.yml'), 'utf8')).accounts;
@@ -16,7 +17,7 @@ for (const role of ['event_add', 'root', 'review']) {
     const account = accounts.find(row => row.role === role && row.runtest_web === true);
     assert.ok(account, `Missing configured ${role} account`);
     const target = accountTarget(account, settings, {});
-    assert.equal(new URL(target.appUrl).hostname, 'localhost');
+    assertLocalUrl(target.appUrl, 'ADM application target');
     Object.assign(cfg, {
       appUrl: target.appUrl, role, accountName: account.name,
       email: account.email, password: account.password_env ? process.env[account.password_env] : account.password,
@@ -38,7 +39,7 @@ for (const role of ['event_add', 'root', 'review']) {
       const landing = new URL(page.url());
       assert.equal(landing.origin, target.appUrl);
       assert.equal(landing.pathname, '/home');
-      const response = await context.request.get(target.appUrl + '/api/session');
+      const response = await localRequestGet(context, target.appUrl + '/api/session');
       assert.equal(response.status(), 200);
       const session = await response.json();
       assert.equal(session.authenticated, true);

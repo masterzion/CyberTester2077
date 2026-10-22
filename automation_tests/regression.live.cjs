@@ -7,6 +7,8 @@ const YAML = require('yaml');
 const { chromium } = require('playwright');
 const { attachNetworkEvidence } = require('./network-evidence.cjs');
 const { completeLogin } = require('./login-completion.cjs');
+const { assertLocalUrl, installLocalBrowserGuard } = require('./local-only.cjs');
+installLocalBrowserGuard(chromium);
 const output = path.join(__dirname, 'output', 'live-regression-' + new Date().toISOString().replace(/[:.]/g, '-'));
 const config = YAML.parse(fs.readFileSync(path.join(__dirname, 'automation-settings.yml'), 'utf8'));
 const accounts = YAML.parse(fs.readFileSync(path.join(__dirname, 'credentials.yml'), 'utf8')).accounts;
@@ -14,6 +16,7 @@ const origin = process.env.APP_URL || config.web.app_url;
 fs.mkdirSync(output, { recursive: true });
 
 test('authenticated responsive controls, Learn availability and guardian read-only messages', { timeout: 240000 }, async () => {
+  assertLocalUrl(origin, 'APP_URL');
   const browser = await chromium.launch({ headless: true });
   const findings = [], topics = [];
   try {

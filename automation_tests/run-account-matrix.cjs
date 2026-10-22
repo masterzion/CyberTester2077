@@ -4,6 +4,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const YAML = require('yaml');
 const { accountTarget } = require('./account-target.cjs');
+const { assertLocalUrl } = require('./local-only.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const OUTPUT_ROOT = path.join(__dirname, 'output');
@@ -76,6 +77,11 @@ function main() {
   loadDotEnv();
   const accounts = (YAML.parse(fs.readFileSync(credentialsFile, 'utf8')) || {}).accounts;
   if (!Array.isArray(accounts)) throw new Error('credentials.yml must contain an accounts list.');
+  for (const account of accounts) {
+    if (!account.name || !account.role) continue;
+    const selected = (includeWeb && (account.runtest_web === true || (account.runtest_admin === true && accountTarget(account, settings).admin))) || (includeMobile && account.runtest_mobile === true);
+    if (selected) assertLocalUrl(accountTarget(account, settings).appUrl, 'account matrix application target');
+  }
   const profiles = Array.isArray(settings.mobile?.screen_profiles) ? settings.mobile.screen_profiles : [];
   console.log('[RUN START] ' + localTimestamp(startedAt));
   console.log('[CONFIG] settings=' + settingsFile + ' credentials=' + credentialsFile + ' app_url=' + (settings.web?.app_url || '') + ' model=' + (settings.llm?.playwright_model || '') + ' mobile_enabled=' + (settings.mobile?.enabled === true) + ' mobile_profiles=' + profiles.map(profile => profile.name + ':' + profile.width + 'x' + profile.height).join(','));
